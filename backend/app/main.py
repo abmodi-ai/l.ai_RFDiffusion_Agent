@@ -62,12 +62,21 @@ def create_app() -> FastAPI:
     )
 
     # ---- CORS ----
+    # Allow any ngrok subdomain + explicit origins from config.
+    # Wildcard entries (containing *) are filtered out of the explicit list
+    # since CORSMiddleware doesn't support glob patterns in allow_origins.
+    explicit_origins = [
+        o for o in settings.ALLOWED_ORIGINS if "*" not in o
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.ALLOWED_ORIGINS,
+        allow_origins=explicit_origins or ["*"],
+        # Match ngrok-free.app and ngrok-free.dev subdomains
+        allow_origin_regex=r"https://.*\.ngrok-free\.(app|dev)",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["*"],
     )
 
     # ---- Routers ----

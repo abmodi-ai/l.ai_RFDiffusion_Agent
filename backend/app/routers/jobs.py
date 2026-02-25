@@ -190,7 +190,25 @@ async def stream_job_progress(
             try:
                 status = job_manager.get_status(resolved_job_id)
             except Exception:
-                yield f"event: error\ndata: {json.dumps({'error': 'Job not found'})}\n\n"
+                # Job not in in-memory manager (e.g. after backend restart).
+                # Fall back to the DB status.
+                if job_row:
+                    db.refresh(job_row)
+                    db_status = job_row.status
+                    if db_status in ("completed", "failed", "cancelled"):
+                        event_name = "completed" if db_status == "completed" else "failed"
+                        data = json.dumps({
+                            "job_id": job_id,
+                            "status": db_status,
+                            "progress": 1.0 if db_status == "completed" else None,
+                            "message": job_row.error_message or (
+                                "Job completed" if db_status == "completed" else "Job failed"
+                            ),
+                        })
+                        yield f"event: {event_name}\ndata: {data}\n\n"
+                        break
+                # Truly not found anywhere
+                yield f"event: failed\ndata: {json.dumps({'status': 'failed', 'message': 'Job not found'})}\n\n"
                 break
 
             current_status = status.get("status")

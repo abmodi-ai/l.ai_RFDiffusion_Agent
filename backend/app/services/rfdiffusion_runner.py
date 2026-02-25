@@ -8,8 +8,10 @@ import asyncio
 import logging
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
+from uuid import UUID
 
 if TYPE_CHECKING:
     from app.config import Settings
@@ -17,6 +19,43 @@ if TYPE_CHECKING:
     from app.services.job_manager import JobManager
 
 logger = logging.getLogger(__name__)
+
+
+def _update_db_job_status(
+    db_job_id: Optional[UUID],
+    status: str,
+    error_message: Optional[str] = None,
+    duration_secs: Optional[float] = None,
+    result_summary: Optional[dict] = None,
+) -> None:
+    """Persist job status to the database (runs in its own session)."""
+    if db_job_id is None:
+        return
+    try:
+        from app.db.connection import get_engine
+        from app.db.models import Job
+        from sqlalchemy.orm import Session as _Session
+
+        engine = get_engine()
+        with _Session(engine) as session:
+            job = session.get(Job, db_job_id)
+            if job is None:
+                logger.warning("DB job %s not found for status update", db_job_id)
+                return
+            job.status = status
+            if error_message is not None:
+                job.error_message = error_message
+            if status == "running" and job.started_at is None:
+                job.started_at = datetime.now(timezone.utc)
+            if status in ("completed", "failed", "cancelled"):
+                job.completed_at = datetime.now(timezone.utc)
+            if duration_secs is not None:
+                job.duration_secs = duration_secs
+            if result_summary is not None:
+                job.result_summary = result_summary
+            session.commit()
+    except Exception:
+        logger.exception("Failed to update DB job %s status to %s", db_job_id, status)
 
 
 async def run_rfdiffusion(
@@ -30,6 +69,7 @@ async def run_rfdiffusion(
     job_manager: "JobManager",
     file_manager: "FileManager",
     config: "Settings",
+    db_job_id: Optional[UUID] = None,
 ) -> None:
     """
     Launch RFdiffusion as an async subprocess and track progress.
@@ -80,6 +120,7 @@ async def run_rfdiffusion(
 
     logger.info("Starting RFdiffusion for job %s: %s", job_id, " ".join(cmd))
     job_manager.update_status(job_id, "running", progress=0.0, message="RFdiffusion started")
+    await asyncio.to_thread(_update_db_job_status, db_job_id, "running")
 
     try:
         process = await asyncio.create_subprocess_exec(
@@ -130,11 +171,12 @@ async def run_rfdiffusion(
         if return_code != 0:
             # Extract last few lines for the error message
             tail = "\n".join(full_output.splitlines()[-10:])
+            error_msg = f"RFdiffusion exited with code {return_code}.\n{tail}"
             job_manager.update_status(
-                job_id,
-                "failed",
-                progress=None,
-                message=f"RFdiffusion exited with code {return_code}.\n{tail}",
+                job_id, "failed", progress=None, message=error_msg,
+            )
+            await asyncio.to_thread(
+                _update_db_job_status, db_job_id, "failed", error_msg,
             )
             logger.error("Job %s failed (exit %d)", job_id, return_code)
             return
@@ -153,15 +195,32 @@ async def run_rfdiffusion(
             progress=1.0,
             message=f"Completed — {len(output_pdb_ids)} design(s) generated",
         )
+
+        # Calculate duration and persist completion to DB
+        started = job_manager._jobs.get(job_id, {}).get("started_at")
+        duration = None
+        if started:
+            try:
+                from datetime import datetime as _dt
+                start_dt = _dt.fromisoformat(started)
+                duration = (datetime.now(timezone.utc) - start_dt).total_seconds()
+            except Exception:
+                pass
+        await asyncio.to_thread(
+            _update_db_job_status, db_job_id, "completed",
+            None, duration,
+            {"num_designs": len(output_pdb_ids), "output_pdb_ids": output_pdb_ids},
+        )
         logger.info("Job %s completed with %d designs", job_id, len(output_pdb_ids))
 
     except asyncio.TimeoutError:
+        timeout_msg = f"Timed out after {config.JOB_TIMEOUT_SECS}s"
         logger.error("Job %s timed out after %ds", job_id, config.JOB_TIMEOUT_SECS)
         job_manager.update_status(
-            job_id,
-            "failed",
-            progress=None,
-            message=f"Timed out after {config.JOB_TIMEOUT_SECS}s",
+            job_id, "failed", progress=None, message=timeout_msg,
+        )
+        await asyncio.to_thread(
+            _update_db_job_status, db_job_id, "failed", timeout_msg,
         )
         # Attempt to kill the process
         try:
@@ -170,10 +229,11 @@ async def run_rfdiffusion(
             pass
 
     except Exception as exc:
+        error_msg = f"Unexpected error: {exc}"
         logger.exception("Job %s encountered an unexpected error", job_id)
         job_manager.update_status(
-            job_id,
-            "failed",
-            progress=None,
-            message=f"Unexpected error: {exc}",
+            job_id, "failed", progress=None, message=error_msg,
+        )
+        await asyncio.to_thread(
+            _update_db_job_status, db_job_id, "failed", error_msg,
         )

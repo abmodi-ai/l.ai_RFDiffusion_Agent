@@ -67,33 +67,13 @@ def register(
     db: Session = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> AuthResponse:
-    """Create a new user account and return a JWT."""
-    register_limiter.check(get_client_ip(request))
+    """Create a new user account and return a JWT.
 
-    try:
-        user = register_user(
-            db,
-            email=body.email,
-            password=body.password,
-            display_name=body.display_name,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-
-    ip = request.client.host if request.client else None
-    user_agent = request.headers.get("user-agent")
-
-    session_obj = create_session(db, user.id, ip_address=ip, user_agent=user_agent)
-    token = create_jwt(session_obj.session_token, str(user.id), settings)
-
-    log_register(db, user_id=user.id)
-    log_login(db, user_id=user.id, ip=ip)
-
-    return AuthResponse(
-        token=token,
-        user_id=str(user.id),
-        email=user.email,
-        display_name=user.display_name,
+    Disabled during alpha launch — accounts are created manually.
+    """
+    raise HTTPException(
+        status_code=403,
+        detail="Registration is disabled during alpha launch. Please contact the team for access.",
     )
 
 

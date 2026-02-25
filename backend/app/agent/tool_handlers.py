@@ -217,6 +217,7 @@ def _handle_run_rfdiffusion(
         job_manager=ctx.job_manager,
         file_manager=ctx.file_manager,
         config=ctx.settings,
+        db_job_id=job.id,
     )
     loop = ctx.event_loop
     loop.call_soon_threadsafe(lambda: loop.create_task(coro, name=f"rfdiffusion-{backend_job_id}"))

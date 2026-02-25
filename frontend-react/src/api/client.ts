@@ -4,7 +4,9 @@
 
 import type { AuthResponse, ChatMessageMetadata, Conversation, JobInfo, UserProfile } from '@/types';
 
-const API_BASE = '/api';
+// In local dev, Vite proxies /api to the backend.
+// In production (GCP), set VITE_API_BASE to the ngrok URL, e.g. "https://xyz.ngrok-free.app/api"
+const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 
 function getToken(): string | null {
   return localStorage.getItem('ligant_token');
@@ -17,6 +19,10 @@ function authHeaders(): Record<string, string> {
   };
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
+  }
+  // Skip ngrok's browser warning interstitial for API calls
+  if (API_BASE.includes('ngrok')) {
+    headers['ngrok-skip-browser-warning'] = '1';
   }
   return headers;
 }
@@ -172,10 +178,15 @@ export async function listJobs(): Promise<JobInfo[]> {
 
 /**
  * Returns an EventSource-like SSE connection for job progress.
+ * Adds ngrok-skip-browser-warning via query param to avoid ngrok interstitial page.
  */
 export function streamJobProgress(jobId: string): EventSource {
   const token = getToken();
-  return new EventSource(`${API_BASE}/job/${jobId}/stream${token ? `?token=${token}` : ''}`);
+  const params = new URLSearchParams();
+  if (token) params.set('token', token);
+  // Tell ngrok to skip its browser warning page for SSE connections
+  params.set('ngrok-skip-browser-warning', '1');
+  return new EventSource(`${API_BASE}/job/${jobId}/stream?${params.toString()}`);
 }
 
 // ── File Upload ─────────────────────────────────────────────────────────────

@@ -1,15 +1,12 @@
 import { useEffect } from 'react';
 import { useAuthStore } from '@/store/authStore';
 import { LoginForm } from '@/components/Auth/LoginForm';
-import { RegisterForm } from '@/components/Auth/RegisterForm';
 import { ChatContainer } from '@/components/Chat/ChatContainer';
 import { Sidebar } from '@/components/Layout/Sidebar';
 import { Header } from '@/components/Layout/Header';
-import { useState } from 'react';
 
 export default function App() {
   const { token, user, isLoading, checkAuth } = useAuthStore();
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
 
   useEffect(() => {
     checkAuth();
@@ -35,30 +32,8 @@ export default function App() {
           </div>
 
           <div className="bg-white rounded-xl shadow-lg p-6">
-            <div className="flex mb-6 border-b">
-              <button
-                className={`flex-1 pb-3 text-sm font-medium ${
-                  authMode === 'login'
-                    ? 'text-primary-600 border-b-2 border-primary-600'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-                onClick={() => setAuthMode('login')}
-              >
-                Sign In
-              </button>
-              <button
-                className={`flex-1 pb-3 text-sm font-medium ${
-                  authMode === 'register'
-                    ? 'text-primary-600 border-b-2 border-primary-600'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-                onClick={() => setAuthMode('register')}
-              >
-                Create Account
-              </button>
-            </div>
-
-            {authMode === 'login' ? <LoginForm /> : <RegisterForm />}
+            <h2 className="text-lg font-semibold text-gray-800 mb-4">Sign In</h2>
+            <LoginForm />
           </div>
         </div>
       </div>
