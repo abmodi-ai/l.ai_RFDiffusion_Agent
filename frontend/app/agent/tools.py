@@ -48,8 +48,11 @@ TOOLS = [
     {
         "name": "run_rfdiffusion",
         "description": (
-            "Run RFdiffusion to design protein binders. Requires an uploaded "
-            "PDB file. The contigs string defines which residues to keep fixed "
+            "Run RFdiffusion to design protein binders. Requires a PDB file that "
+            "has been fetched or uploaded first. IMPORTANT: input_pdb_id must be the "
+            "file_id string returned by fetch_pdb or upload_pdb (e.g. "
+            "'09ec9f46fbe643a5b68cf006f990917f'), NOT the 4-character PDB ID. "
+            "The contigs string defines which residues to keep fixed "
             "and how many residues to generate for the binder. Example contig: "
             "'A1-100/0 100-100' means keep chain A residues 1-100 fixed and "
             "generate a 100-residue binder."
@@ -59,7 +62,11 @@ TOOLS = [
             "properties": {
                 "input_pdb_id": {
                     "type": "string",
-                    "description": "File ID of the uploaded target PDB",
+                    "description": (
+                        "The file_id returned from fetch_pdb or upload_pdb "
+                        "(a hex string like '09ec9f46fbe643a5b68cf006f990917f'). "
+                        "This is NOT the 4-character PDB ID."
+                    ),
                 },
                 "contigs": {
                     "type": "string",

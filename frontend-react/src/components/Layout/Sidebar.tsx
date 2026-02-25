@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAuthStore } from '@/store/authStore';
 import { useChatStore } from '@/store/chatStore';
 import * as api from '@/api/client';
@@ -8,7 +8,7 @@ import { SidebarSkeleton, JobCardSkeleton } from '@/components/Layout/Skeleton';
 
 export function Sidebar() {
   const { user } = useAuthStore();
-  const { conversations, loadConversations, selectConversation, newConversation } = useChatStore();
+  const { conversations, loadConversations, selectConversation, newConversation, sendMessage } = useChatStore();
   const [jobs, setJobs] = useState<JobInfo[]>([]);
   const [activeTab, setActiveTab] = useState<'chats' | 'jobs'>('chats');
   const [loadingChats, setLoadingChats] = useState(true);
@@ -17,7 +17,21 @@ export function Sidebar() {
   useEffect(() => {
     loadConversations().finally(() => setLoadingChats(false));
     api.listJobs().then(setJobs).catch(() => {}).finally(() => setLoadingJobs(false));
+
+    // Periodically refresh jobs to pick up status changes
+    const interval = setInterval(() => {
+      api.listJobs().then(setJobs).catch(() => {});
+    }, 15000);
+    return () => clearInterval(interval);
   }, [loadConversations]);
+
+  const handleJobClick = useCallback((job: JobInfo) => {
+    if (job.status === 'completed') {
+      sendMessage(
+        `Show me the results and visualize the designs from job ${job.job_id}`
+      );
+    }
+  }, [sendMessage]);
 
   return (
     <div className="w-72 bg-gray-900 text-white flex flex-col h-full">
@@ -107,7 +121,7 @@ export function Sidebar() {
                 </p>
               )}
               {jobs.map((job) => (
-                <JobCard key={job.job_id} job={job} />
+                <JobCard key={job.job_id} job={job} onClickJob={handleJobClick} />
               ))}
             </div>
           )

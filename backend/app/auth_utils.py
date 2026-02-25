@@ -147,8 +147,13 @@ def verify_session(db: Session, session_token: str) -> User | None:
     if session_obj is None:
         return None
 
-    session_obj.last_activity = now
-    db.flush()
+    # NOTE: We intentionally do NOT update last_activity here.
+    # Setting it makes the ORM object dirty; SQLAlchemy autoflush
+    # then sends an UPDATE that acquires a row lock.  For SSE
+    # streaming endpoints the session stays open for the entire
+    # stream, holding that lock and blocking every other
+    # authenticated request on the same session token.
+    # Activity is tracked via the audit_log table instead.
 
     user = db.query(User).filter(User.id == session_obj.user_id).first()
     return user

@@ -4,6 +4,7 @@ Chat endpoints with Server-Sent Events (SSE) streaming.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -35,6 +36,7 @@ class ChatHistoryItem(BaseModel):
     role: str
     content: str
     model_used: Optional[str] = None
+    metadata: Optional[dict] = None
     created_at: str
 
 
@@ -73,6 +75,7 @@ async def send_message(
         file_manager=file_manager,
         job_manager=job_manager,
         settings=settings,
+        event_loop=asyncio.get_running_loop(),
     )
 
     async def event_generator():
@@ -92,8 +95,9 @@ async def send_message(
 
         # Generate title for new conversations using Haiku
         if is_new_conversation and settings.ANTHROPIC_API_KEY:
-            title = generate_conversation_title(
-                settings.ANTHROPIC_API_KEY, body.message
+            title = await asyncio.to_thread(
+                generate_conversation_title,
+                settings.ANTHROPIC_API_KEY, body.message,
             )
             if title:
                 _save_conversation_title(db, conversation_id, user.id, title)
@@ -133,6 +137,7 @@ def get_conversation_history(
             role=m.role,
             content=m.content,
             model_used=m.model_used,
+            metadata=m.metadata_json,
             created_at=m.created_at.isoformat(),
         )
         for m in messages
@@ -196,6 +201,69 @@ def list_conversations(
     # Sort by last activity descending
     conversations.sort(key=lambda c: c["last_activity"] or "", reverse=True)
     return conversations
+
+
+@router.get("/pdb/{file_id}/content")
+def get_pdb_content_for_user(
+    file_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_session),
+):
+    """Return PDB file content as JSON (JWT auth, for frontend visualization reload).
+
+    Tries the in-memory file_manager first (works during the session that
+    created the file).  Falls back to the ``pdb_files`` DB table + disk scan
+    so that files survive backend restarts.
+    """
+    from fastapi import HTTPException
+    from pathlib import Path as _Path
+    from app.db.models import PDBFile
+
+    file_manager = request.app.state.file_manager
+
+    # 1. Try in-memory registry (fast path — same server session)
+    try:
+        path = file_manager.get_path(file_id)
+        content = path.read_text(encoding="utf-8", errors="replace")
+        return {"file_id": file_id, "content": content}
+    except Exception:
+        pass
+
+    # 2. Fall back: look up pdb_files table using file_id as UUID
+    try:
+        file_uuid = uuid.UUID(file_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Invalid file_id: {file_id}")
+
+    pdb_row = db.query(PDBFile).filter(PDBFile.id == file_uuid).first()
+    if pdb_row is None:
+        raise HTTPException(status_code=404, detail=f"PDB file {file_id} not found")
+
+    # Scan upload_dir for a file matching *_{filename}
+    upload_dir: _Path = file_manager.upload_dir
+    matches = list(upload_dir.glob(f"*_{pdb_row.filename}"))
+    if not matches:
+        # Also try output_dir
+        output_dir: _Path = file_manager.output_dir
+        matches = list(output_dir.glob(f"**/{pdb_row.filename}"))
+    if not matches:
+        raise HTTPException(
+            status_code=404,
+            detail=f"PDB file {file_id} found in DB but missing on disk",
+        )
+
+    # Use the most recent match
+    matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    content = matches[0].read_text(encoding="utf-8", errors="replace")
+
+    # Re-register with the SAME file_id for future fast lookups
+    file_manager._registry[file_id] = {
+        "path": matches[0],
+        "original_filename": pdb_row.original_filename,
+    }
+
+    return {"file_id": file_id, "content": content}
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

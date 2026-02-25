@@ -39,6 +39,19 @@ export interface VisualizationData {
   color_by: string;
 }
 
+/** Metadata stored in DB alongside assistant messages */
+export interface ChatMessageMetadata {
+  tool_calls?: ToolCallInfo[];
+  visualizations?: VisualizationMeta[];
+}
+
+/** Lightweight viz reference (file_ids only, no PDB text) */
+export interface VisualizationMeta {
+  file_ids: string[];
+  style: string;
+  color_by: string;
+}
+
 export interface Conversation {
   conversation_id: string;
   title: string | null;
@@ -66,6 +79,7 @@ export interface SSEEvent {
 
 export interface JobInfo {
   job_id: string;
+  backend_job_id: string | null;
   status: string;
   contigs: string | null;
   num_designs: number;

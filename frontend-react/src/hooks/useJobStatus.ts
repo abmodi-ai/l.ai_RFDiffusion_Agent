@@ -1,20 +1,28 @@
 /**
  * useJobStatus hook — SSE connection for real-time job progress.
  *
- * Returns the current progress (0-1) or null if not connected.
+ * Returns the current progress (0-1), live status, and optional message.
  * Auto-reconnects on connection drop with exponential backoff.
  */
 
 import { useEffect, useRef, useState } from 'react';
 
-export function useJobStatus(jobId: string | null): number | null {
-  const [progress, setProgress] = useState<number | null>(null);
+export interface JobStatusState {
+  progress: number | null;
+  status: string | null;
+  message: string | null;
+}
+
+const INITIAL: JobStatusState = { progress: null, status: null, message: null };
+
+export function useJobStatus(jobId: string | null): JobStatusState {
+  const [state, setState] = useState<JobStatusState>(INITIAL);
   const retryCount = useRef(0);
   const maxRetries = 5;
 
   useEffect(() => {
     if (!jobId) {
-      setProgress(null);
+      setState(INITIAL);
       return;
     }
 
@@ -30,24 +38,67 @@ export function useJobStatus(jobId: string | null): number | null {
         `/api/job/${jobId}/stream${token ? `?token=${token}` : ''}`,
       );
 
+      // Reset retry count on successful connection
+      eventSource.onopen = () => {
+        retryCount.current = 0;
+      };
+
       eventSource.addEventListener('progress', (e) => {
         try {
           const data = JSON.parse(e.data);
-          if (data.progress !== null && data.progress !== undefined) {
-            setProgress(data.progress);
-          }
+          setState({
+            progress: data.progress ?? null,
+            status: data.status ?? 'running',
+            message: data.message ?? null,
+          });
         } catch {
           // Ignore
         }
       });
 
-      eventSource.addEventListener('completed', () => {
-        setProgress(1);
+      eventSource.addEventListener('completed', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          setState({
+            progress: 1,
+            status: 'completed',
+            message: data.message ?? 'Job completed',
+          });
+        } catch {
+          setState({ progress: 1, status: 'completed', message: 'Job completed' });
+        }
         eventSource?.close();
       });
 
-      eventSource.addEventListener('failed', () => {
-        setProgress(null);
+      eventSource.addEventListener('failed', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          setState({
+            progress: null,
+            status: 'failed',
+            message: data.message ?? 'Job failed',
+          });
+        } catch {
+          setState({ progress: null, status: 'failed', message: 'Job failed' });
+        }
+        eventSource?.close();
+      });
+
+      eventSource.addEventListener('error', (e) => {
+        // SSE "error" event from backend (job not found, etc.)
+        try {
+          const me = e as MessageEvent;
+          if (me.data) {
+            const data = JSON.parse(me.data);
+            setState({
+              progress: null,
+              status: 'failed',
+              message: data.error ?? 'Unknown error',
+            });
+          }
+        } catch {
+          // Ignore
+        }
         eventSource?.close();
       });
 
@@ -71,5 +122,5 @@ export function useJobStatus(jobId: string | null): number | null {
     };
   }, [jobId]);
 
-  return progress;
+  return state;
 }

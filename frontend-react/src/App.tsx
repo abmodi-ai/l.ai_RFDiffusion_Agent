@@ -25,7 +25,7 @@ export default function App() {
 
   if (!token || !user) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-primary-50 to-blue-100">
+      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-primary-50 to-primary-100">
         <div className="w-full max-w-md p-8">
           <div className="text-center mb-8">
             <h1 className="text-4xl font-bold text-primary-800">Ligant.ai</h1>

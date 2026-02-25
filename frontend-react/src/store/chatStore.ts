@@ -5,9 +5,11 @@
 import { create } from 'zustand';
 import type {
   ChatMessage,
+  ChatMessageMetadata,
   Conversation,
   ToolCallInfo,
   VisualizationData,
+  VisualizationMeta,
 } from '@/types';
 import * as api from '@/api/client';
 
@@ -130,14 +132,65 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ conversationId: id, messages: [], isLoadingHistory: true });
     try {
       const history = await api.getConversationHistory(id);
-      const messages: ChatMessage[] = (history as Array<{ id: string; role: string; content: string; model_used?: string; created_at: string }>).map((m) => ({
-        id: m.id,
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-        modelUsed: m.model_used,
-        timestamp: m.created_at,
-      }));
+
+      // Pass 1: Build messages with tool calls immediately (no PDB fetch yet)
+      const messages: ChatMessage[] = history.map((m) => {
+        const msg: ChatMessage = {
+          id: m.id,
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          modelUsed: m.model_used ?? undefined,
+          timestamp: m.created_at,
+        };
+        const meta = m.metadata as ChatMessageMetadata | null | undefined;
+        if (meta?.tool_calls) {
+          msg.toolCalls = meta.tool_calls;
+        }
+        return msg;
+      });
       set({ messages, isLoadingHistory: false });
+
+      // Pass 2: Async-fetch PDB contents for messages with visualizations
+      for (const m of history) {
+        const meta = m.metadata as ChatMessageMetadata | null | undefined;
+        if (!meta?.visualizations?.length) continue;
+
+        // Collect all file_ids across all visualizations for this message
+        const allFileIds = meta.visualizations.flatMap((v) => v.file_ids);
+        if (allFileIds.length === 0) continue;
+
+        // Fetch PDB contents in parallel
+        api.getPdbContents(allFileIds).then((pdbMap) => {
+          if (Object.keys(pdbMap).length === 0) return;
+
+          // Build VisualizationData objects with actual PDB text
+          const vizData: VisualizationData[] = (meta.visualizations as VisualizationMeta[])
+            .map((v) => {
+              const pdbContents: Record<string, string> = {};
+              for (const fid of v.file_ids) {
+                if (pdbMap[fid]) pdbContents[fid] = pdbMap[fid];
+              }
+              if (Object.keys(pdbContents).length === 0) return null;
+              return {
+                pdb_contents: pdbContents,
+                style: v.style,
+                color_by: v.color_by,
+              };
+            })
+            .filter((v): v is VisualizationData => v !== null);
+
+          if (vizData.length === 0) return;
+
+          // Update the specific message with visualization data
+          set((s) => ({
+            messages: s.messages.map((msg) =>
+              msg.id === m.id ? { ...msg, visualizations: vizData } : msg,
+            ),
+          }));
+        }).catch(() => {
+          // Silently fail — user just won't see the 3D viewer
+        });
+      }
     } catch (err) {
       set({ error: (err as Error).message, isLoadingHistory: false });
     }

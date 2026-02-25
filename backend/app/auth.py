@@ -21,7 +21,7 @@ _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 _bearer_scheme = HTTPBearer(auto_error=False)
 
 
-async def verify_api_key(
+def verify_api_key(
     api_key: str | None = Security(_api_key_header),
     settings: Settings = Depends(get_settings),
 ) -> str:
@@ -46,7 +46,7 @@ async def verify_api_key(
     return api_key
 
 
-async def get_current_user(
+def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db_session),
@@ -75,7 +75,7 @@ async def get_current_user(
     return user
 
 
-async def verify_api_key_or_jwt(
+def verify_api_key_or_jwt(
     api_key: str | None = Security(_api_key_header),
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),
     settings: Settings = Depends(get_settings),

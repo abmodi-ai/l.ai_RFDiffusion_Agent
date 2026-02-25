@@ -1,10 +1,20 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { useChatStore } from '@/store/chatStore';
 
-export function ChatInput() {
+export interface ChatInputHandle {
+  focusInput: () => void;
+}
+
+export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, ref) {
   const { sendMessage, isStreaming } = useChatStore();
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useImperativeHandle(ref, () => ({
+    focusInput: () => {
+      textareaRef.current?.focus();
+    },
+  }));
 
   const handleSubmit = useCallback(async () => {
     const trimmed = text.trim();
@@ -50,4 +60,4 @@ export function ChatInput() {
       </div>
     </div>
   );
-}
+});

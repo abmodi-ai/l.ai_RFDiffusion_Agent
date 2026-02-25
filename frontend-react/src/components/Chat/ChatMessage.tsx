@@ -1,14 +1,51 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { ChatMessage as ChatMessageType } from '@/types';
 import { MolStarViewer } from '@/components/MolViewer/MolStarViewer';
+import { OptionButtons } from './OptionButtons';
+import { parseMessageOptions, type ParsedOption } from '@/utils/parseMessageOptions';
 
 interface Props {
   message: ChatMessageType;
+  /** Whether this message's options are interactive (latest unanswered) */
+  isInteractive?: boolean;
+  isStreaming?: boolean;
+  onSendMessage?: (text: string) => void;
+  onFocusInput?: () => void;
+  /** The label the user selected (for historical highlighting) */
+  selectedLabel?: string | null;
 }
 
-export function ChatMessage({ message }: Props) {
+export function ChatMessage({
+  message,
+  isInteractive,
+  isStreaming,
+  onSendMessage,
+  onFocusInput,
+  selectedLabel,
+}: Props) {
   const isUser = message.role === 'user';
+
+  // Parse options for ALL assistant messages (not just the last one)
+  const { bodyMarkdown, options } = useMemo(() => {
+    if (isUser || !message.content) {
+      return { bodyMarkdown: message.content, options: [] as ParsedOption[] };
+    }
+    // Don't parse while streaming the latest message (content is incomplete)
+    if (isInteractive && isStreaming) {
+      return { bodyMarkdown: message.content, options: [] as ParsedOption[] };
+    }
+    return parseMessageOptions(message.content);
+  }, [message.content, isUser, isInteractive, isStreaming]);
+
+  const handleOptionClick = (option: ParsedOption) => {
+    if (option.isFreeform) {
+      onFocusInput?.();
+    } else {
+      // Send the full label text so it reads naturally in chat history
+      onSendMessage?.(option.label);
+    }
+  };
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
@@ -20,10 +57,20 @@ export function ChatMessage({ message }: Props) {
         }`}
       >
         {/* Main text content */}
-        {message.content && (
+        {(bodyMarkdown || message.content) && (
           <div className={`prose prose-sm max-w-none ${isUser ? 'prose-invert' : ''}`}>
-            <ReactMarkdown>{message.content}</ReactMarkdown>
+            <ReactMarkdown>{options.length > 0 ? bodyMarkdown : message.content}</ReactMarkdown>
           </div>
+        )}
+
+        {/* Option buttons — shown on ALL assistant messages that have options */}
+        {options.length > 0 && (
+          <OptionButtons
+            options={options}
+            disabled={!!isStreaming || (!isInteractive && selectedLabel == null)}
+            onSelectOption={handleOptionClick}
+            selectedLabel={selectedLabel}
+          />
         )}
 
         {/* Tool calls */}
@@ -50,12 +97,7 @@ export function ChatMessage({ message }: Props) {
           </div>
         )}
 
-        {/* Model info */}
-        {message.modelUsed && !isUser && (
-          <div className="mt-2 text-xs text-gray-400">
-            {message.modelUsed}
-          </div>
-        )}
+        {/* Model info — hidden from users */}
       </div>
     </div>
   );

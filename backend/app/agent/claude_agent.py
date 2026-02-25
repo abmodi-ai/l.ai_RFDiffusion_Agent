@@ -8,6 +8,7 @@ This is the backend version of the agent that:
   - Persists messages to the database
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -69,11 +70,38 @@ After submitting a job with `run_rfdiffusion`:
 - **DO** tell the user the job has been submitted.
 - **ONLY** call `check_job_status` when the user explicitly asks.
 
+## Conversational Flow — ONE QUESTION AT A TIME
+This is critical: **ask only ONE question per message**. Never dump a list of \
+questions. Guide the user step by step through a natural conversation.
+
+When asking a question, **always provide numbered options** the user can pick \
+from, plus a final option for them to explain their own answer. Format:
+
+```
+[Your brief context sentence]
+
+1. **Option A** — short description
+2. **Option B** — short description
+3. **Option C** — short description
+4. **Something else** — tell me what you have in mind
+```
+
+### Example flow for a binder design request:
+- Message 1: Ask about the target structure (offer to fetch from RCSB or ask for upload)
+- Message 2: After getting the structure, ask about the binding surface / epitope
+- Message 3: Ask about binder length
+- Message 4: Ask about number of designs and diversity
+- Then proceed to run the job.
+
+Do NOT front-load all questions. Each message should have exactly ONE question \
+with options. Wait for the user's answer before moving to the next question.
+
 ## Communication Style
 - Explain what you are doing and why before calling a tool.
 - Summarize results clearly with next steps.
 - Use precise scientific language.
 - Never fabricate structural data.
+- Keep responses concise — no walls of text or emoji-heavy formatting.
 """
 
 
@@ -96,7 +124,7 @@ async def run_agent_streaming(
       {"event": "visualization", "data": {"pdb_contents": {...}, ...}}
       {"event": "done", "data": {"model_used": "...", "iterations": N}}
     """
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.AsyncAnthropic(api_key=api_key)
 
     # Append new user message
     messages.append({"role": "user", "content": user_message})
@@ -105,6 +133,8 @@ async def run_agent_streaming(
     _save_message(db_session, user_id, conversation_id, "user", user_message)
 
     assistant_text_blocks: List[str] = []
+    collected_tool_calls: List[Dict[str, Any]] = []
+    collected_visualizations: List[Dict[str, Any]] = []
     last_model_used = ""
 
     for iteration in range(MAX_AGENT_ITERATIONS):
@@ -139,7 +169,7 @@ async def run_agent_streaming(
             api_kwargs["thinking"] = thinking_config
 
         try:
-            response = client.messages.create(**api_kwargs)
+            response = await client.messages.create(**api_kwargs)
         except anthropic.APIError as exc:
             logger.exception("Anthropic API error")
             error_text = f"I encountered an API error: {exc}. Please try again."
@@ -186,34 +216,56 @@ async def run_agent_streaming(
             tool_results: List[Dict[str, Any]] = []
 
             for tool_block in tool_use_blocks:
-                result_str = handle_tool_call(
+                # Run synchronous tool handlers in a thread to avoid
+                # blocking the event loop (some tools do network I/O
+                # like httpx.get for RCSB fetches).
+                raw_result_str = await asyncio.to_thread(
+                    handle_tool_call,
                     tool_name=tool_block.name,
                     tool_input=tool_block.input,
                     user_id=user_id,
                     ctx=tool_context,
                     db_session=db_session,
                 )
-                result_str = compress_tool_result(result_str)
+
+                # Extract visualization data from the FULL result before
+                # compression (PDB contents are huge and get truncated).
+                viz_data = None
+                try:
+                    parsed = json.loads(raw_result_str)
+                    if isinstance(parsed, dict) and "pdb_contents" in parsed:
+                        viz_data = {
+                            "pdb_contents": parsed["pdb_contents"],
+                            "style": parsed.get("style", "cartoon"),
+                            "color_by": parsed.get("color_by", "chain"),
+                        }
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+                result_str = compress_tool_result(raw_result_str)
 
                 yield {
                     "event": "tool_result",
                     "data": {"name": tool_block.name, "result": result_str},
                 }
 
-                # Check for visualization data
-                try:
-                    parsed = json.loads(result_str)
-                    if isinstance(parsed, dict) and "pdb_contents" in parsed:
-                        yield {
-                            "event": "visualization",
-                            "data": {
-                                "pdb_contents": parsed["pdb_contents"],
-                                "style": parsed.get("style", "cartoon"),
-                                "color_by": parsed.get("color_by", "chain"),
-                            },
-                        }
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                # Collect metadata for DB persistence
+                collected_tool_calls.append({
+                    "name": tool_block.name,
+                    "input": tool_block.input,
+                    "result": result_str,
+                })
+
+                if viz_data is not None:
+                    yield {
+                        "event": "visualization",
+                        "data": viz_data,
+                    }
+                    collected_visualizations.append({
+                        "file_ids": list(viz_data["pdb_contents"].keys()),
+                        "style": viz_data.get("style", "cartoon"),
+                        "color_by": viz_data.get("color_by", "chain"),
+                    })
 
                 tool_results.append({
                     "type": "tool_result",
@@ -233,13 +285,22 @@ async def run_agent_streaming(
         messages.append({"role": "assistant", "content": limit_msg})
         yield {"event": "text", "data": limit_msg}
 
-    # Persist final assistant response
+    # Persist final assistant response with tool/visualization metadata
     final_text = "\n\n".join(assistant_text_blocks)
+    metadata = None
+    if collected_tool_calls or collected_visualizations:
+        metadata = {}
+        if collected_tool_calls:
+            metadata["tool_calls"] = collected_tool_calls
+        if collected_visualizations:
+            metadata["visualizations"] = collected_visualizations
+
     if final_text.strip():
         _save_message(
             db_session, user_id, conversation_id, "assistant",
             final_text, model_used=last_model_used,
             token_count=_safe_token_count(response),
+            metadata_json=metadata,
         )
 
     yield {
@@ -254,6 +315,7 @@ async def run_agent_streaming(
 def _save_message(
     db, user_id: UUID, conversation_id: UUID, role: str, content: str,
     model_used: Optional[str] = None, token_count: Optional[int] = None,
+    metadata_json: Optional[Dict[str, Any]] = None,
 ) -> None:
     msg = ChatMessage(
         user_id=user_id,
@@ -262,6 +324,7 @@ def _save_message(
         content=content,
         model_used=model_used,
         token_count=token_count,
+        metadata_json=metadata_json,
     )
     db.add(msg)
     db.flush()

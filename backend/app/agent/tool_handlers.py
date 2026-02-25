@@ -39,10 +39,11 @@ class ToolContext:
     directly instead of making HTTP requests.
     """
 
-    def __init__(self, file_manager, job_manager, settings):
+    def __init__(self, file_manager, job_manager, settings, event_loop=None):
         self.file_manager = file_manager
         self.job_manager = job_manager
         self.settings = settings
+        self.event_loop = event_loop
 
 
 def handle_tool_call(
@@ -164,8 +165,6 @@ def _handle_run_rfdiffusion(
     db,
 ) -> str:
     """Submit an RFdiffusion job directly through the job manager."""
-    import asyncio
-
     input_pdb_id = tool_input["input_pdb_id"]
     contigs = tool_input["contigs"]
     num_designs = tool_input.get("num_designs", 1)
@@ -202,25 +201,25 @@ def _handle_run_rfdiffusion(
 
     local_job_id = str(job.id)
 
-    # Launch the runner as a background task
+    # Launch the runner as a background task.
+    # Note: handle_tool_call runs in a thread pool (asyncio.to_thread),
+    # so we must use the event loop stored on the context.
     from app.services.rfdiffusion_runner import run_rfdiffusion
 
-    loop = asyncio.get_event_loop()
-    loop.create_task(
-        run_rfdiffusion(
-            job_id=backend_job_id,
-            input_pdb_path=input_pdb_path,
-            output_dir=job_output_dir,
-            contigs=contigs,
-            num_designs=num_designs,
-            diffuser_T=diffuser_T,
-            hotspot_res=hotspot_res,
-            job_manager=ctx.job_manager,
-            file_manager=ctx.file_manager,
-            config=ctx.settings,
-        ),
-        name=f"rfdiffusion-{backend_job_id}",
+    coro = run_rfdiffusion(
+        job_id=backend_job_id,
+        input_pdb_path=input_pdb_path,
+        output_dir=job_output_dir,
+        contigs=contigs,
+        num_designs=num_designs,
+        diffuser_T=diffuser_T,
+        hotspot_res=hotspot_res,
+        job_manager=ctx.job_manager,
+        file_manager=ctx.file_manager,
+        config=ctx.settings,
     )
+    loop = ctx.event_loop
+    loop.call_soon_threadsafe(lambda: loop.create_task(coro, name=f"rfdiffusion-{backend_job_id}"))
 
     return json.dumps({
         "status": "queued",

@@ -2,7 +2,7 @@
  * HTTP + SSE client with JWT auth for the Ligant.ai backend.
  */
 
-import type { AuthResponse, Conversation, JobInfo, UserProfile } from '@/types';
+import type { AuthResponse, ChatMessageMetadata, Conversation, JobInfo, UserProfile } from '@/types';
 
 const API_BASE = '/api';
 
@@ -108,13 +108,50 @@ export async function sendChatMessage(
   return res;
 }
 
+export interface HistoryMessage {
+  id: string;
+  role: string;
+  content: string;
+  model_used?: string;
+  metadata?: ChatMessageMetadata | null;
+  created_at: string;
+}
+
 export async function getConversationHistory(
   conversationId: string,
-): Promise<unknown[]> {
+): Promise<HistoryMessage[]> {
   const res = await fetch(`${API_BASE}/chat/${conversationId}/history`, {
     headers: authHeaders(),
   });
-  return handleResponse<unknown[]>(res);
+  return handleResponse<HistoryMessage[]>(res);
+}
+
+/**
+ * Fetch PDB file content by file_id (JWT auth).
+ */
+export async function getPdbContent(
+  fileId: string,
+): Promise<{ file_id: string; content: string }> {
+  const res = await fetch(`${API_BASE}/chat/pdb/${fileId}/content`, {
+    headers: authHeaders(),
+  });
+  return handleResponse(res);
+}
+
+/**
+ * Fetch multiple PDB files and return a map of file_id → content.
+ */
+export async function getPdbContents(
+  fileIds: string[],
+): Promise<Record<string, string>> {
+  const results = await Promise.all(
+    fileIds.map((id) => getPdbContent(id).catch(() => null)),
+  );
+  const map: Record<string, string> = {};
+  for (const r of results) {
+    if (r) map[r.file_id] = r.content;
+  }
+  return map;
 }
 
 export async function listConversations(): Promise<Conversation[]> {
