@@ -15,7 +15,7 @@ from app.services.file_manager import FileManager
 from app.services.job_manager import JobManager
 
 # Import routers
-from app.routers import health, upload, jobs, pdb
+from app.routers import health, upload, jobs, pdb, auth, chat
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Ligant.ai Backend",
         description="RFdiffusion protein design backend running on DGX Spark",
-        version="0.1.0",
+        version="0.2.0",
         lifespan=lifespan,
     )
 
@@ -71,10 +71,16 @@ def create_app() -> FastAPI:
     )
 
     # ---- Routers ----
+    # Existing (API-key auth)
     app.include_router(health.router)
     app.include_router(upload.router)
     app.include_router(jobs.router)
     app.include_router(pdb.router)
+
+    # New (JWT auth)
+    app.include_router(auth.router)
+    app.include_router(chat.router)
+    app.include_router(jobs.jobs_user_router)
 
     return app
 

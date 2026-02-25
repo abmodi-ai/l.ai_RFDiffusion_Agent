@@ -7,8 +7,10 @@ which in turn calls the FastAPI backend over HTTP and persists state in the
 PostgreSQL database via SQLAlchemy.
 """
 
+import hashlib
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -16,18 +18,20 @@ from typing import Any, Dict, Optional
 import requests
 import streamlit as st
 
-from ..config import get_settings
-from ..db.connection import get_db
-from ..db.models import Job, PDBFile
-from ..db.audit import (
+from app.config import get_settings
+from app.db.connection import get_db
+from app.db.models import Job, PDBFile
+from app.db.audit import (
     log_job_submitted,
     log_job_completed,
     log_pdb_uploaded,
+    log_pdb_fetched,
     log_viz_viewed,
 )
 
 logger = logging.getLogger(__name__)
 
+RCSB_DOWNLOAD_URL = "https://files.rcsb.org/download/{pdb_id}.pdb"
 
 # ── Helper: backend HTTP request ─────────────────────────────────────────────
 
@@ -104,6 +108,7 @@ def handle_tool_call(
     """
     dispatch = {
         "upload_pdb": _handle_upload_pdb,
+        "fetch_pdb": _handle_fetch_pdb,
         "run_rfdiffusion": _handle_run_rfdiffusion,
         "check_job_status": _handle_check_job_status,
         "get_results": _handle_get_results,
@@ -163,14 +168,14 @@ def _handle_upload_pdb(
     )
     data = resp.json()
 
-    file_id = data.get("file_id") or data.get("id")
+    backend_file_id = data.get("file_id") or data.get("id")
     file_size = data.get("file_size_bytes", len(file_bytes))
     checksum = data.get("checksum_sha256")
 
     # Persist to local DB
     with get_db() as db:
         pdb_file = PDBFile(
-            id=uuid.UUID(file_id) if file_id else uuid.uuid4(),
+            id=uuid.UUID(backend_file_id) if backend_file_id else uuid.uuid4(),
             user_id=user_id,
             filename=data.get("filename", filename),
             original_filename=filename,
@@ -181,12 +186,109 @@ def _handle_upload_pdb(
         db.add(pdb_file)
         log_pdb_uploaded(db, user_id=user_id, file_id=pdb_file.id, filename=filename)
 
+    # Return the backend's original hex file_id so subsequent tool calls
+    # (get_pdb_info, visualize_structure, run_rfdiffusion) can use it
+    # directly against the backend API.  uuid.UUID() accepts both formats.
     return json.dumps({
         "status": "success",
-        "file_id": str(pdb_file.id),
+        "file_id": backend_file_id,
         "filename": filename,
         "file_size_bytes": file_size,
         "message": f"PDB file '{filename}' uploaded successfully.",
+    })
+
+
+def _handle_fetch_pdb(
+    tool_input: Dict[str, Any],
+    user_id: uuid.UUID,
+) -> str:
+    """Fetch a PDB file from RCSB by PDB ID and upload it to the backend."""
+
+    pdb_id = tool_input["pdb_id"].strip().upper()
+
+    # Validate PDB ID format: starts with a digit, followed by 3 alphanumeric chars
+    if not re.match(r"^[0-9][A-Za-z0-9]{3}$", pdb_id):
+        return json.dumps({
+            "error": (
+                f"Invalid PDB ID '{pdb_id}'. "
+                "PDB IDs must be 4 characters: a digit followed by 3 alphanumeric characters "
+                "(e.g., '6AL5', '1BRS')."
+            )
+        })
+
+    # Fetch from RCSB
+    rcsb_url = RCSB_DOWNLOAD_URL.format(pdb_id=pdb_id)
+    try:
+        rcsb_resp = requests.get(rcsb_url, timeout=30)
+    except requests.exceptions.RequestException as exc:
+        return json.dumps({
+            "error": f"Failed to fetch PDB {pdb_id} from RCSB: {exc}"
+        })
+
+    if rcsb_resp.status_code == 404:
+        return json.dumps({
+            "error": (
+                f"PDB ID '{pdb_id}' not found on RCSB. "
+                "Please verify the PDB ID is correct."
+            )
+        })
+    if not rcsb_resp.ok:
+        return json.dumps({
+            "error": (
+                f"RCSB returned HTTP {rcsb_resp.status_code} for PDB ID '{pdb_id}'."
+            )
+        })
+
+    file_bytes = rcsb_resp.content
+    filename = f"{pdb_id}.pdb"
+
+    # Upload to backend via existing endpoint
+    resp = _backend_request(
+        "POST",
+        "/api/upload-pdb",
+        files={"file": (filename, file_bytes, "chemical/x-pdb")},
+    )
+    data = resp.json()
+
+    backend_file_id = data.get("file_id") or data.get("id")
+    file_size = data.get("file_size_bytes", len(file_bytes))
+    checksum = data.get("checksum_sha256") or hashlib.sha256(file_bytes).hexdigest()
+
+    # Persist to local DB
+    with get_db() as db:
+        pdb_file = PDBFile(
+            id=uuid.UUID(backend_file_id) if backend_file_id else uuid.uuid4(),
+            user_id=user_id,
+            filename=data.get("filename", filename),
+            original_filename=filename,
+            source="rcsb_fetch",
+            file_size_bytes=file_size,
+            checksum_sha256=checksum,
+            metadata_json={"rcsb_pdb_id": pdb_id},
+        )
+        db.add(pdb_file)
+        log_pdb_fetched(
+            db, user_id=user_id, file_id=pdb_file.id,
+            pdb_id=pdb_id, filename=filename,
+        )
+
+    # Store in session state so sidebar/UI picks it up
+    if "uploaded_files" not in st.session_state:
+        st.session_state["uploaded_files"] = {}
+    st.session_state["uploaded_files"][filename] = file_bytes
+
+    # Return the backend's original hex file_id so subsequent tool calls
+    # can use it directly against the backend API.
+    return json.dumps({
+        "status": "success",
+        "file_id": backend_file_id,
+        "pdb_id": pdb_id,
+        "filename": filename,
+        "file_size_bytes": file_size,
+        "message": (
+            f"PDB structure '{pdb_id}' fetched from RCSB and uploaded successfully "
+            f"({file_size:,} bytes)."
+        ),
     })
 
 
@@ -245,7 +347,14 @@ def _handle_run_rfdiffusion(
             f"RFdiffusion job submitted successfully. "
             f"Generating {payload['num_designs']} design(s) with "
             f"{payload['diffuser_T']} diffusion timesteps. "
-            f"Use check_job_status with job_id '{local_job_id}' to monitor progress."
+            f"Job ID: '{local_job_id}'."
+        ),
+        "IMPORTANT_INSTRUCTION": (
+            "DO NOT call check_job_status to poll for this job. "
+            "RFdiffusion jobs take several minutes. Tell the user the job has "
+            "been submitted and that they can ask you to check its status later. "
+            "Only call check_job_status if the user explicitly asks for a status "
+            "update. Never poll in a loop."
         ),
     })
 

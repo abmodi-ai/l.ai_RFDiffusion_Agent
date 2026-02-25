@@ -1,0 +1,64 @@
+version: "3.8"
+
+services:
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ligant
+      POSTGRES_PASSWORD: ligant
+      POSTGRES_DB: ligant
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ligant"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Backend (FastAPI) ──────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - BACKEND_API_KEY=${BACKEND_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=ligant
+      - DB_PASSWORD=ligant
+      - DB_NAME=ligant
+      - UPLOAD_DIR=/data/uploads
+      - OUTPUT_DIR=/data/outputs
+      - ALLOWED_ORIGINS=["http://localhost:3000","http://localhost:80"]
+    volumes:
+      - data-uploads:/data/uploads
+      - data-outputs:/data/outputs
+      - ./RFdiffusion:/app/RFdiffusion:ro
+      - ./models:/app/models:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Frontend (React + Nginx) ───────────────────────────────────────────────
+  frontend:
+    build:
+      context: frontend-react
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  data-uploads:
+  data-outputs:

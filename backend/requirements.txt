@@ -5,3 +5,13 @@ pydantic-settings>=2.6.0
 python-multipart>=0.0.12
 biopython>=1.84
 python-dotenv>=1.0.0
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+# Authentication
+bcrypt>=4.0.0
+PyJWT>=2.8.0
+# Anthropic API (for backend agent)
+anthropic>=0.40.0
+# HTTP client (for RCSB fetching in backend agent)
+httpx>=0.27.0
