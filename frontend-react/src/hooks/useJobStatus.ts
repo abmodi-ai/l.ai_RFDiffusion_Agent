@@ -11,9 +11,10 @@ export interface JobStatusState {
   progress: number | null;
   status: string | null;
   message: string | null;
+  outputPdbIds: string[] | null;
 }
 
-const INITIAL: JobStatusState = { progress: null, status: null, message: null };
+const INITIAL: JobStatusState = { progress: null, status: null, message: null, outputPdbIds: null };
 
 export function useJobStatus(jobId: string | null): JobStatusState {
   const [state, setState] = useState<JobStatusState>(INITIAL);
@@ -50,6 +51,7 @@ export function useJobStatus(jobId: string | null): JobStatusState {
             progress: data.progress ?? null,
             status: data.status ?? 'running',
             message: data.message ?? null,
+            outputPdbIds: null,
           });
         } catch {
           // Ignore
@@ -63,9 +65,10 @@ export function useJobStatus(jobId: string | null): JobStatusState {
             progress: 1,
             status: 'completed',
             message: data.message ?? 'Job completed',
+            outputPdbIds: data.output_pdb_ids ?? null,
           });
         } catch {
-          setState({ progress: 1, status: 'completed', message: 'Job completed' });
+          setState({ progress: 1, status: 'completed', message: 'Job completed', outputPdbIds: null });
         }
         eventSource?.close();
       });
@@ -77,9 +80,10 @@ export function useJobStatus(jobId: string | null): JobStatusState {
             progress: null,
             status: 'failed',
             message: data.message ?? 'Job failed',
+            outputPdbIds: null,
           });
         } catch {
-          setState({ progress: null, status: 'failed', message: 'Job failed' });
+          setState({ progress: null, status: 'failed', message: 'Job failed', outputPdbIds: null });
         }
         eventSource?.close();
       });
@@ -94,6 +98,7 @@ export function useJobStatus(jobId: string | null): JobStatusState {
               progress: null,
               status: 'failed',
               message: data.error ?? 'Unknown error',
+              outputPdbIds: null,
             });
           }
         } catch {

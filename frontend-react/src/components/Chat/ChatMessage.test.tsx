@@ -4,10 +4,10 @@ import { describe, it, expect, vi } from 'vitest';
 import { ChatMessage } from './ChatMessage';
 import { mockChatMessage } from '@/test/mocks';
 
-// Mock MolStarViewer since it depends on heavy Molstar imports
-vi.mock('@/components/MolViewer/MolStarViewer', () => ({
-  MolStarViewer: ({ pdbContents }: { pdbContents: Record<string, string> }) => (
-    <div data-testid="molstar-viewer">
+// Mock StructureViewer since it depends on heavy Molstar imports
+vi.mock('@/components/MolViewer/StructureViewer', () => ({
+  StructureViewer: ({ pdbContents }: { pdbContents: Record<string, string> }) => (
+    <div data-testid="structure-viewer">
       {Object.keys(pdbContents).join(', ')}
     </div>
   ),
@@ -62,7 +62,7 @@ describe('ChatMessage', () => {
       ],
     });
     render(<ChatMessage message={msg} />);
-    expect(screen.getByTestId('molstar-viewer')).toBeInTheDocument();
+    expect(screen.getByTestId('structure-viewer')).toBeInTheDocument();
   });
 
   it('shows model name for assistant messages', () => {

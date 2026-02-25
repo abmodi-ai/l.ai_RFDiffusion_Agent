@@ -289,6 +289,27 @@ def _handle_check_job_status(
         result["message"] = f"Running. Progress: {status_data.get('progress', '?')}."
     elif new_status == "failed":
         result["message"] = f"Failed: {status_data.get('message', 'unknown')}"
+        # Include original job params and PDB chain info for error recovery
+        result["contigs"] = job.contigs
+        result["params"] = job.params
+        if job.input_pdb_id:
+            result["input_pdb_id"] = str(job.input_pdb_id)
+            try:
+                input_path = ctx.file_manager.get_path(
+                    str(job.input_pdb_id).replace("-", "")
+                )
+                analysis = analyze_pdb(input_path)
+                chain_summary = []
+                for c in analysis.get("chains", []):
+                    chain_summary.append({
+                        "chain_id": c["chain_id"],
+                        "residue_range": f"{c.get('residue_start')}-{c.get('residue_end')}",
+                        "num_residues": c["num_residues"],
+                        "segments": c.get("segments", []),
+                    })
+                result["pdb_chain_info"] = chain_summary
+            except Exception:
+                pass  # Non-critical — agent can call get_pdb_info manually
     else:
         result["message"] = f"Status: {new_status}"
 

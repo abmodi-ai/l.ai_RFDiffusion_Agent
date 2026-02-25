@@ -1,8 +1,9 @@
 import { useState, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { ChatMessage as ChatMessageType } from '@/types';
-import { MolStarViewer } from '@/components/MolViewer/MolStarViewer';
+import { StructureViewer } from '@/components/MolViewer/StructureViewer';
 import { OptionButtons } from './OptionButtons';
+import { InlineJobTracker } from './InlineJobTracker';
 import { parseMessageOptions, type ParsedOption } from '@/utils/parseMessageOptions';
 
 interface Props {
@@ -25,10 +26,11 @@ export function ChatMessage({
   selectedLabel,
 }: Props) {
   const isUser = message.role === 'user';
+  const isSystem = message.role === 'system';
 
   // Parse options for ALL assistant messages (not just the last one)
   const { bodyMarkdown, options } = useMemo(() => {
-    if (isUser || !message.content) {
+    if (isUser || isSystem || !message.content) {
       return { bodyMarkdown: message.content, options: [] as ParsedOption[] };
     }
     // Don't parse while streaming the latest message (content is incomplete)
@@ -36,7 +38,23 @@ export function ChatMessage({
       return { bodyMarkdown: message.content, options: [] as ParsedOption[] };
     }
     return parseMessageOptions(message.content);
-  }, [message.content, isUser, isInteractive, isStreaming]);
+  }, [message.content, isUser, isSystem, isInteractive, isStreaming]);
+
+  // Extract job_id from run_rfdiffusion tool call results for inline tracker
+  const rfdiffJobId = useMemo(() => {
+    if (!message.toolCalls) return null;
+    for (const tc of message.toolCalls) {
+      if (tc.name === 'run_rfdiffusion' && tc.result) {
+        try {
+          const result = JSON.parse(tc.result);
+          return result.job_id ?? null;
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
+  }, [message.toolCalls]);
 
   const handleOptionClick = (option: ParsedOption) => {
     if (option.isFreeform) {
@@ -46,6 +64,38 @@ export function ChatMessage({
       onSendMessage?.(option.label);
     }
   };
+
+  // System messages (auto-viz) get a distinct centered style
+  if (isSystem) {
+    return (
+      <div className="flex justify-center">
+        <div className="max-w-[85%] w-full rounded-2xl px-4 py-3 bg-primary-50 border border-primary-200 shadow-sm">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="inline-flex rounded-full h-2.5 w-2.5 bg-primary-500" />
+            <span className="text-sm font-medium text-primary-700">Auto-visualization</span>
+          </div>
+          {message.content && (
+            <div className="prose prose-sm max-w-none text-primary-900">
+              <ReactMarkdown>{message.content}</ReactMarkdown>
+            </div>
+          )}
+          {message.visualizations && message.visualizations.length > 0 && (
+            <div className="mt-3 space-y-3">
+              {message.visualizations.map((viz, i) => (
+                <div key={i} className="rounded-lg overflow-hidden border border-primary-200">
+                  <StructureViewer
+                    pdbContents={viz.pdb_contents}
+                    style={viz.style as 'cartoon' | 'ball-and-stick' | 'surface' | 'spacefill'}
+                    colorBy={viz.color_by as 'chain' | 'residue' | 'element' | 'uniform'}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
@@ -82,12 +132,15 @@ export function ChatMessage({
           </div>
         )}
 
+        {/* Inline job tracker for RFdiffusion jobs */}
+        {rfdiffJobId && <InlineJobTracker jobId={rfdiffJobId} />}
+
         {/* Visualizations */}
         {message.visualizations && message.visualizations.length > 0 && (
           <div className="mt-3 space-y-3">
             {message.visualizations.map((viz, i) => (
               <div key={i} className="rounded-lg overflow-hidden border border-gray-200">
-                <MolStarViewer
+                <StructureViewer
                   pdbContents={viz.pdb_contents}
                   style={viz.style as 'cartoon' | 'ball-and-stick' | 'surface' | 'spacefill'}
                   colorBy={viz.color_by as 'chain' | 'residue' | 'element' | 'uniform'}

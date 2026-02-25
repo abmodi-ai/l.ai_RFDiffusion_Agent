@@ -4,11 +4,15 @@ import { ChatMessage } from '@/components/Chat/ChatMessage';
 import { ChatInput, type ChatInputHandle } from '@/components/Chat/ChatInput';
 import { ChatSkeleton } from '@/components/Layout/Skeleton';
 import { parseMessageOptions } from '@/utils/parseMessageOptions';
+import { useJobAutoVisualize } from '@/hooks/useJobAutoVisualize';
 
 export function ChatContainer() {
   const { messages, isStreaming, isLoadingHistory, sendMessage } = useChatStore();
   const bottomRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<ChatInputHandle>(null);
+
+  // Auto-visualize completed RFdiffusion jobs
+  useJobAutoVisualize();
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });

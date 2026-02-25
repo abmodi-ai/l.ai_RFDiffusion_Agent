@@ -10,7 +10,7 @@ import { useEffect, useRef } from 'react';
 interface Props {
   pdbContents: Record<string, string>;
   style?: 'cartoon' | 'ball-and-stick' | 'surface' | 'spacefill';
-  colorBy?: 'chain' | 'residue' | 'element' | 'uniform';
+  colorBy?: 'chain' | 'residue' | 'element' | 'uniform' | 'bfactor';
   height?: number;
 }
 
@@ -21,12 +21,21 @@ export function MolStarViewer({
   height = 400,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const pluginRef = useRef<unknown>(null);
+  const pluginRef = useRef<any>(null);
+  const readyRef = useRef(false);
 
+  // Keep current style/colorBy in refs so the init effect can read latest values
+  const styleRef = useRef(style);
+  const colorByRef = useRef(colorBy);
+  styleRef.current = style;
+  colorByRef.current = colorBy;
+
+  // Effect 1: Initialize plugin + load PDB data (only on pdbContents change)
   useEffect(() => {
     if (!containerRef.current) return;
 
     let cancelled = false;
+    readyRef.current = false;
 
     async function init() {
       try {
@@ -39,7 +48,7 @@ export function MolStarViewer({
         // Clean up previous plugin
         if (pluginRef.current) {
           try {
-            (pluginRef.current as { dispose: () => void }).dispose();
+            pluginRef.current.dispose();
           } catch {
             // Ignore cleanup errors
           }
@@ -78,15 +87,18 @@ export function MolStarViewer({
             'pdb',
           );
 
-          // Use the default preset first to get the structure loaded
+          // Use the default preset to get the structure loaded
           await plugin.builders.structure.hierarchy.applyPreset(
             trajectory,
             'default',
           );
         }
 
-        // Apply visual style after all structures are loaded
-        await applyVisualStyle(plugin, style, colorBy);
+        if (cancelled) return;
+        readyRef.current = true;
+
+        // Apply initial visual style (uses refs for latest values)
+        await applyVisualStyle(plugin, styleRef.current, colorByRef.current);
 
         // Auto-zoom to fit all structures
         try {
@@ -119,14 +131,20 @@ export function MolStarViewer({
       cancelled = true;
       if (pluginRef.current) {
         try {
-          (pluginRef.current as { dispose: () => void }).dispose();
+          pluginRef.current.dispose();
         } catch {
           // Ignore
         }
         pluginRef.current = null;
       }
     };
-  }, [pdbContents, style, colorBy]);
+  }, [pdbContents]);
+
+  // Effect 2: Update visual style in-place without re-initializing plugin
+  useEffect(() => {
+    if (!pluginRef.current || !readyRef.current) return;
+    applyVisualStyle(pluginRef.current, style, colorBy);
+  }, [style, colorBy]);
 
   return (
     <div
@@ -139,7 +157,8 @@ export function MolStarViewer({
 
 /**
  * Apply visual representation and coloring to all loaded structures.
- * Uses Molstar's internal representation update mechanisms.
+ * Removes existing representations first, then adds new ones with the
+ * desired style/color so the default preset reps don't persist underneath.
  */
 async function applyVisualStyle(
   plugin: any,
@@ -150,6 +169,9 @@ async function applyVisualStyle(
     const structures = plugin.managers.structure.hierarchy.current.structures;
     if (!structures || structures.length === 0) return;
 
+    const reprType = getRepresentationType(style);
+    const colorTheme = getColorTheme(colorBy);
+
     for (const structureRef of structures) {
       const components = structureRef.components;
       if (!components || components.length === 0) continue;
@@ -158,21 +180,27 @@ async function applyVisualStyle(
         const representations = component.representations;
         if (!representations) continue;
 
-        if (representations.length > 0) {
-          const reprType = getRepresentationType(style);
-          const colorTheme = getColorTheme(colorBy);
-
+        // Remove all existing representations from this component
+        const toRemove = [...representations];
+        for (const repr of toRemove) {
           try {
-            await plugin.builders.structure.representation.addRepresentation(
-              component.cell,
-              {
-                type: reprType,
-                color: colorTheme,
-              },
-            );
+            await plugin.state.data.build().delete(repr.cell.transform.ref).commit();
           } catch {
-            // If direct update fails, the default representation is fine
+            // Ignore removal errors
           }
+        }
+
+        // Add fresh representation with desired style and color
+        try {
+          await plugin.builders.structure.representation.addRepresentation(
+            component.cell,
+            {
+              type: reprType,
+              color: colorTheme,
+            },
+          );
+        } catch {
+          // If adding fails, the structure remains visible without custom representation
         }
       }
     }
@@ -198,6 +226,7 @@ function getColorTheme(colorBy: string): string {
     case 'residue': return 'residue-name';
     case 'element': return 'element-symbol';
     case 'uniform': return 'uniform';
+    case 'bfactor': return 'uncertainty';
     default: return 'chain-id';
   }
 }

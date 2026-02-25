@@ -13,6 +13,13 @@ import type {
 } from '@/types';
 import * as api from '@/api/client';
 
+export interface PendingJob {
+  jobId: string;
+  backendJobId: string;
+  conversationId: string;
+  messageId: string;
+}
+
 interface ChatState {
   messages: ChatMessage[];
   conversations: Conversation[];
@@ -20,12 +27,17 @@ interface ChatState {
   isStreaming: boolean;
   isLoadingHistory: boolean;
   error: string | null;
+  pendingJobs: PendingJob[];
 
   sendMessage: (text: string) => Promise<void>;
+  sendErrorRecovery: (jobId: string, errorMessage: string) => Promise<void>;
   loadConversations: () => Promise<void>;
   selectConversation: (id: string) => Promise<void>;
   newConversation: () => void;
   clearError: () => void;
+  addPendingJob: (job: PendingJob) => void;
+  removePendingJob: (jobId: string) => void;
+  appendVisualizationMessage: (jobId: string, visualizations: VisualizationData[]) => void;
 }
 
 let messageIdCounter = 0;
@@ -40,6 +52,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isStreaming: false,
   isLoadingHistory: false,
   error: null,
+  pendingJobs: [],
 
   sendMessage: async (text: string) => {
     const { conversationId } = get();
@@ -119,6 +132,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
+  sendErrorRecovery: async (jobId: string, errorMessage: string) => {
+    const truncatedError = errorMessage.length > 500
+      ? errorMessage.slice(-500)
+      : errorMessage;
+    const recoveryPrompt =
+      `My RFdiffusion job (ID: ${jobId}) just failed with this error:\n\n` +
+      `\`\`\`\n${truncatedError}\n\`\`\`\n\n` +
+      `Can you help me diagnose what went wrong and fix the parameters?`;
+    await get().sendMessage(recoveryPrompt);
+  },
+
   loadConversations: async () => {
     try {
       const conversations = await api.listConversations();
@@ -137,14 +161,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const messages: ChatMessage[] = history.map((m) => {
         const msg: ChatMessage = {
           id: m.id,
-          role: m.role as 'user' | 'assistant',
+          role: m.role as 'user' | 'assistant' | 'system',
           content: m.content,
           modelUsed: m.model_used ?? undefined,
           timestamp: m.created_at,
         };
-        const meta = m.metadata as ChatMessageMetadata | null | undefined;
+        const meta = m.metadata as (ChatMessageMetadata & { job_id?: string; auto_viz?: boolean }) | null | undefined;
         if (meta?.tool_calls) {
           msg.toolCalls = meta.tool_calls;
+        }
+        if (meta?.job_id) {
+          msg.jobId = meta.job_id;
         }
         return msg;
       });
@@ -200,6 +227,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ conversationId: null, messages: [] });
   },
 
+  addPendingJob: (job: PendingJob) => {
+    set((s) => ({ pendingJobs: [...s.pendingJobs, job] }));
+  },
+
+  removePendingJob: (jobId: string) => {
+    set((s) => ({ pendingJobs: s.pendingJobs.filter((j) => j.jobId !== jobId) }));
+  },
+
+  appendVisualizationMessage: (jobId: string, visualizations: VisualizationData[]) => {
+    const sysMsg: ChatMessage = {
+      id: nextId(),
+      role: 'system',
+      content: 'RFdiffusion job completed. Here are the generated structures:',
+      visualizations,
+      jobId,
+    };
+    set((s) => ({ messages: [...s.messages, sysMsg] }));
+  },
+
   clearError: () => set({ error: null }),
 }));
 
@@ -252,6 +298,26 @@ function _processSSE(
             : tc,
         ),
       }));
+
+      // Track run_rfdiffusion jobs for auto-visualization
+      if (tr.name === 'run_rfdiffusion') {
+        try {
+          const result = JSON.parse(tr.result);
+          if (result.job_id && result.backend_job_id) {
+            const { conversationId, addPendingJob } = get();
+            if (conversationId) {
+              addPendingJob({
+                jobId: result.job_id,
+                backendJobId: result.backend_job_id,
+                conversationId,
+                messageId: assistantId,
+              });
+            }
+          }
+        } catch {
+          // Ignore parse errors
+        }
+      }
       break;
     }
     case 'visualization': {

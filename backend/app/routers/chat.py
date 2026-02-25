@@ -31,6 +31,11 @@ class ChatMessageRequest(BaseModel):
     conversation_id: Optional[str] = None
 
 
+class AutoVizRequest(BaseModel):
+    job_id: str
+    output_pdb_ids: list[str] = Field(..., min_length=1)
+
+
 class ChatHistoryItem(BaseModel):
     id: str
     role: str
@@ -90,6 +95,7 @@ async def send_message(
             tool_context=tool_context,
             api_key=settings.ANTHROPIC_API_KEY,
             db_session=db,
+            google_api_key=settings.GOOGLE_API_KEY,
         ):
             yield _format_sse(event["event"], event["data"])
 
@@ -264,6 +270,56 @@ def get_pdb_content_for_user(
     }
 
     return {"file_id": file_id, "content": content}
+
+
+@router.post("/{conversation_id}/auto-viz")
+def save_auto_visualization(
+    conversation_id: str,
+    body: AutoVizRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_session),
+) -> dict:
+    """Persist an auto-generated visualization message (no LLM call needed)."""
+    conv_uuid = uuid.UUID(conversation_id)
+
+    # Verify conversation belongs to this user
+    exists = (
+        db.query(ChatMessage)
+        .filter(
+            ChatMessage.user_id == user.id,
+            ChatMessage.conversation_id == conv_uuid,
+        )
+        .first()
+    )
+    if not exists:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    content = f"RFdiffusion job completed. Here are the generated structures:"
+
+    metadata = {
+        "auto_viz": True,
+        "job_id": body.job_id,
+        "visualizations": [
+            {
+                "file_ids": body.output_pdb_ids,
+                "style": "cartoon",
+                "color_by": "chain",
+            }
+        ],
+    }
+
+    msg = ChatMessage(
+        user_id=user.id,
+        conversation_id=conv_uuid,
+        role="system",
+        content=content,
+        metadata_json=metadata,
+    )
+    db.add(msg)
+    db.flush()
+
+    return {"id": str(msg.id), "status": "saved"}
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

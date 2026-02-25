@@ -31,6 +31,9 @@ from app.db.models import ChatMessage
 logger = logging.getLogger(__name__)
 
 MAX_AGENT_ITERATIONS = 15
+MAX_API_RETRIES = 3
+API_RETRY_DELAY_SECS = 10
+GEMINI_FALLBACK_MODEL = "gemini-3.1-pro-preview"
 
 # Same system prompt as the frontend agent
 SYSTEM_PROMPT = """\
@@ -69,6 +72,20 @@ After submitting a job with `run_rfdiffusion`:
 - **DO NOT** call `check_job_status` repeatedly to poll.
 - **DO** tell the user the job has been submitted.
 - **ONLY** call `check_job_status` when the user explicitly asks.
+
+## Error Recovery
+When you receive a message about a failed RFdiffusion job:
+1. Call `check_job_status` with the job ID — the response includes the error,
+   original contigs, input PDB file ID, and the actual chain/residue ranges.
+2. Analyze the error. Common failures:
+   - **Residue not in PDB**: Contigs reference residues outside the actual range
+     for that chain. Compare the contigs with the chain ranges in the response.
+   - **Chain not found**: The specified chain letter doesn't exist in the PDB.
+   - **Timeout**: Job took too long — suggest fewer designs or lower diffuser_T.
+3. Explain the problem clearly in 1-2 sentences.
+4. Ask ONE follow-up question with numbered options to fix the issue
+   (e.g., corrected residue ranges, different chain, adjusted parameters).
+5. After the user responds, rerun the job with corrected parameters.
 
 ## Conversational Flow — ONE QUESTION AT A TIME
 This is critical: **ask only ONE question per message**. Never dump a list of \
@@ -113,6 +130,7 @@ async def run_agent_streaming(
     tool_context: ToolContext,
     api_key: str,
     db_session,
+    google_api_key: str = "",
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Async generator that runs the Claude agent loop and yields SSE events.
@@ -125,6 +143,15 @@ async def run_agent_streaming(
       {"event": "done", "data": {"model_used": "...", "iterations": N}}
     """
     client = anthropic.AsyncAnthropic(api_key=api_key)
+
+    # Initialize Gemini client for fallback (lazy — only if key configured)
+    gemini_client = None
+    if google_api_key:
+        try:
+            from google import genai
+            gemini_client = genai.Client(api_key=google_api_key)
+        except Exception as exc:
+            logger.warning("Failed to initialize Gemini client: %s", exc)
 
     # Append new user message
     messages.append({"role": "user", "content": user_message})
@@ -168,16 +195,29 @@ async def run_agent_streaming(
         if thinking_config is not None:
             api_kwargs["thinking"] = thinking_config
 
-        try:
-            response = await client.messages.create(**api_kwargs)
-        except anthropic.APIError as exc:
-            logger.exception("Anthropic API error")
-            error_text = f"I encountered an API error: {exc}. Please try again."
-            yield {"event": "text", "data": error_text}
+        response, fallback_events, model_override = await _call_with_fallback(
+            client=client,
+            api_kwargs=api_kwargs,
+            gemini_client=gemini_client,
+            system_prompt=SYSTEM_PROMPT,
+            messages=api_messages,
+            tools=TOOLS,
+        )
+
+        # Yield any retry/fallback status events
+        for evt in fallback_events:
+            yield evt
+
+        if response is None:
+            # All providers failed — persist error and stop
+            error_text = fallback_events[-1]["data"] if fallback_events else "API error."
             messages.append({"role": "assistant", "content": error_text})
             _save_message(db_session, user_id, conversation_id, "assistant",
                           error_text, model_used=model)
             break
+
+        if model_override:
+            last_model_used = model_override
 
         # Process content blocks
         tool_use_blocks = []
@@ -310,6 +350,102 @@ async def run_agent_streaming(
             "iterations": min(iteration + 1, MAX_AGENT_ITERATIONS),
         },
     }
+
+
+async def _call_with_fallback(
+    client,
+    api_kwargs: Dict[str, Any],
+    gemini_client,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+) -> tuple:
+    """
+    Try Anthropic with retries, then fall back to Gemini on transient failure.
+
+    Returns (response, events_list, model_override).
+    - response: the API response (or None if all providers failed)
+    - events_list: SSE events to yield (retry messages, fallback notice, errors)
+    - model_override: model name string if Gemini was used, else None
+    """
+    events: List[Dict[str, Any]] = []
+    response = None
+    last_transient = False
+
+    for attempt in range(1, MAX_API_RETRIES + 1):
+        try:
+            response = await client.messages.create(**api_kwargs)
+            return (response, events, None)
+        except anthropic.APIError as exc:
+            status = getattr(exc, "status_code", None)
+            is_transient = status in (429, 529) or (isinstance(status, int) and status >= 500)
+
+            if is_transient and attempt < MAX_API_RETRIES:
+                logger.warning(
+                    "Transient API error (status=%s, attempt %d/%d), retrying in %ds: %s",
+                    status, attempt, MAX_API_RETRIES, API_RETRY_DELAY_SECS, exc,
+                )
+                events.append({
+                    "event": "text",
+                    "data": f"\n\n*API is temporarily overloaded — retrying in {API_RETRY_DELAY_SECS}s (attempt {attempt}/{MAX_API_RETRIES})...*\n\n",
+                })
+                await asyncio.sleep(API_RETRY_DELAY_SECS)
+                last_transient = True
+                continue
+
+            if is_transient:
+                # Final attempt also transient — try Gemini fallback
+                last_transient = True
+                logger.warning(
+                    "Anthropic transient error exhausted retries (status=%s): %s",
+                    status, exc,
+                )
+                break
+
+            # Non-transient error (400, 401, etc.) — fail immediately
+            logger.exception("Anthropic API error (non-transient, status=%s)", status)
+            error_text = f"I encountered an API error: {exc}. Please try again."
+            events.append({"event": "text", "data": error_text})
+            return (None, events, None)
+
+    # If we exhausted retries on transient errors, try Gemini fallback
+    if last_transient and gemini_client is not None:
+        logger.info("Falling back to Gemini model %s", GEMINI_FALLBACK_MODEL)
+        events.append({
+            "event": "text",
+            "data": "\n\n*Switching to backup AI model...*\n\n",
+        })
+
+        try:
+            from app.agent.gemini_adapter import call_gemini
+
+            response = await call_gemini(
+                gemini_client=gemini_client,
+                model=GEMINI_FALLBACK_MODEL,
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+            )
+            return (response, events, GEMINI_FALLBACK_MODEL)
+
+        except Exception as exc:
+            logger.exception("Gemini fallback also failed: %s", exc)
+            error_text = (
+                "Both AI providers are currently unavailable. "
+                "Please try again in a few minutes."
+            )
+            events.append({"event": "text", "data": error_text})
+            return (None, events, None)
+
+    # Transient exhausted but no Gemini client configured
+    if last_transient:
+        error_text = (
+            "The AI service is temporarily overloaded after multiple retries. "
+            "Please try again in a few minutes."
+        )
+        events.append({"event": "text", "data": error_text})
+
+    return (None, events, None)
 
 
 def _save_message(

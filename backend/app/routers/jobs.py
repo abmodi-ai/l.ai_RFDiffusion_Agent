@@ -197,10 +197,12 @@ async def stream_job_progress(
                     db_status = job_row.status
                     if db_status in ("completed", "failed", "cancelled"):
                         event_name = "completed" if db_status == "completed" else "failed"
+                        output_ids = (job_row.result_summary or {}).get("output_pdb_ids", [])
                         data = json.dumps({
                             "job_id": job_id,
                             "status": db_status,
                             "progress": 1.0 if db_status == "completed" else None,
+                            "output_pdb_ids": output_ids if db_status == "completed" else [],
                             "message": job_row.error_message or (
                                 "Job completed" if db_status == "completed" else "Job failed"
                             ),
@@ -224,7 +226,7 @@ async def stream_job_progress(
 
                 if current_status == "completed":
                     try:
-                        results = job_manager.get_results(job_id)
+                        results = job_manager.get_results(resolved_job_id)
                         data = json.dumps({**status, **results})
                     except Exception:
                         pass

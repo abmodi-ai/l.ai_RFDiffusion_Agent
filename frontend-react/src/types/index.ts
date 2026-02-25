@@ -19,12 +19,13 @@ export interface UserProfile {
 
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   toolCalls?: ToolCallInfo[];
   visualizations?: VisualizationData[];
   modelUsed?: string;
   timestamp?: string;
+  jobId?: string;
 }
 
 export interface ToolCallInfo {

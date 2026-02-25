@@ -160,6 +160,22 @@ export async function getPdbContents(
   return map;
 }
 
+/**
+ * Persist an auto-generated visualization message to the DB.
+ */
+export async function saveAutoVisualizationMessage(
+  conversationId: string,
+  jobId: string,
+  outputPdbIds: string[],
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/chat/${conversationId}/auto-viz`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ job_id: jobId, output_pdb_ids: outputPdbIds }),
+  });
+  await handleResponse(res);
+}
+
 export async function listConversations(): Promise<Conversation[]> {
   const res = await fetch(`${API_BASE}/chat/conversations`, {
     headers: authHeaders(),

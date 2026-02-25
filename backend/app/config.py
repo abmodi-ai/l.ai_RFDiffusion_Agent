@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # ---------- Anthropic API ----------
     ANTHROPIC_API_KEY: str = ""
 
+    # ---------- Google Gemini API (fallback) ----------
+    GOOGLE_API_KEY: str = ""
+
     # ---------- RFdiffusion paths ----------
     RFDIFFUSION_DIR: Path = _PROJECT_ROOT / "RFdiffusion"
     RFDIFFUSION_MODEL_DIR: Path = _PROJECT_ROOT / "models"
