@@ -32,6 +32,17 @@ models/
 *.pt
 *.pdb
 
+# Node.js
+node_modules/
+frontend-react/dist/
+
+# RFdiffusion source (submodule/clone)
+RFdiffusion/
+
+# Playwright
+test-results/
+playwright-report/
+
 # DGL build
 dgl/
 

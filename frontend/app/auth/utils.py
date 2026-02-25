@@ -13,7 +13,7 @@ import bcrypt
 import jwt
 from sqlalchemy.orm import Session
 
-from ..db.models import User, Session as SessionModel
+from app.db.models import User, Session as SessionModel
 
 
 # ── Password helpers ──────────────────────────────────────────────────────────

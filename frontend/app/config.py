@@ -6,17 +6,24 @@ Supports both local development (psycopg2 + local PostgreSQL) and cloud
 deployment (Cloud SQL Python Connector + pg8000).
 """
 
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Resolve .env relative to the project root (two levels up from this file)
+_THIS_DIR = Path(__file__).resolve().parent  # frontend/app/
+_PROJECT_ROOT = _THIS_DIR.parent.parent      # RFdiffusion_alpha_cluade/
+_ENV_FILE = _PROJECT_ROOT / ".env"
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables and .env file."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_ENV_FILE),
         env_file_encoding="utf-8",
     )
 

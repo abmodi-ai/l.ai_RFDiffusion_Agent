@@ -42,8 +42,8 @@ export function ChatMessage({ message }: Props) {
               <div key={i} className="rounded-lg overflow-hidden border border-gray-200">
                 <MolStarViewer
                   pdbContents={viz.pdb_contents}
-                  style={viz.style}
-                  colorBy={viz.color_by}
+                  style={viz.style as 'cartoon' | 'ball-and-stick' | 'surface' | 'spacefill'}
+                  colorBy={viz.color_by as 'chain' | 'residue' | 'element' | 'uniform'}
                 />
               </div>
             ))}

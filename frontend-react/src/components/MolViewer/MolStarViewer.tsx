@@ -4,20 +4,20 @@ import { useEffect, useRef } from 'react';
  * Mol* (Molstar) 3D molecular viewer component.
  *
  * Accepts PDB file contents as a Record<file_id, pdb_text> and renders
- * them using Molstar's plugin system.
+ * them using Molstar's plugin system with configurable visual styles.
  */
 
 interface Props {
   pdbContents: Record<string, string>;
-  style?: string;
-  colorBy?: string;
+  style?: 'cartoon' | 'ball-and-stick' | 'surface' | 'spacefill';
+  colorBy?: 'chain' | 'residue' | 'element' | 'uniform';
   height?: number;
 }
 
 export function MolStarViewer({
   pdbContents,
-  style: _style = 'cartoon',
-  colorBy: _colorBy = 'chain',
+  style = 'cartoon',
+  colorBy = 'chain',
   height = 400,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -33,7 +33,7 @@ export function MolStarViewer({
         // Dynamic import to avoid bundling Molstar when not needed
         const { createPluginUI } = await import('molstar/lib/mol-plugin-ui');
         const { DefaultPluginUISpec } = await import('molstar/lib/mol-plugin-ui/spec');
-
+        const { renderReact18 } = await import('molstar/lib/mol-plugin-ui/react18');
         if (cancelled || !containerRef.current) return;
 
         // Clean up previous plugin
@@ -47,6 +47,7 @@ export function MolStarViewer({
 
         const plugin = await createPluginUI({
           target: containerRef.current,
+          render: renderReact18,
           spec: {
             ...DefaultPluginUISpec(),
             layout: {
@@ -67,33 +68,32 @@ export function MolStarViewer({
 
         // Load PDB structures
         const entries = Object.entries(pdbContents);
-        for (const [_fileId, pdbText] of entries) {
+        for (const [fileId, pdbText] of entries) {
           const data = await plugin.builders.data.rawData({
             data: pdbText,
-            label: _fileId,
+            label: fileId,
           });
           const trajectory = await plugin.builders.structure.parseTrajectory(
             data,
             'pdb',
           );
+
+          // Use the default preset first to get the structure loaded
           await plugin.builders.structure.hierarchy.applyPreset(
             trajectory,
             'default',
           );
         }
 
+        // Apply visual style after all structures are loaded
+        await applyVisualStyle(plugin, style, colorBy);
+
         // Auto-zoom to fit all structures
-        plugin.managers.camera.focusLoci(
-          plugin.managers.structure.hierarchy.current.structures.map(
-            (s: { cell: { obj?: { data: unknown } } }) => {
-              const obj = s.cell.obj;
-              if (obj && 'data' in (obj as Record<string, unknown>)) {
-                return { loci: { kind: 'whole-structure' as const } };
-              }
-              return undefined;
-            },
-          ).filter(Boolean),
-        );
+        try {
+          plugin.managers.camera.reset();
+        } catch {
+          // Fallback if camera reset fails
+        }
       } catch (err) {
         console.error('Molstar initialization error:', err);
 
@@ -126,7 +126,7 @@ export function MolStarViewer({
         pluginRef.current = null;
       }
     };
-  }, [pdbContents]);
+  }, [pdbContents, style, colorBy]);
 
   return (
     <div
@@ -135,4 +135,69 @@ export function MolStarViewer({
       className="bg-black rounded-lg"
     />
   );
+}
+
+/**
+ * Apply visual representation and coloring to all loaded structures.
+ * Uses Molstar's internal representation update mechanisms.
+ */
+async function applyVisualStyle(
+  plugin: any,
+  style: string,
+  colorBy: string,
+): Promise<void> {
+  try {
+    const structures = plugin.managers.structure.hierarchy.current.structures;
+    if (!structures || structures.length === 0) return;
+
+    for (const structureRef of structures) {
+      const components = structureRef.components;
+      if (!components || components.length === 0) continue;
+
+      for (const component of components) {
+        const representations = component.representations;
+        if (!representations) continue;
+
+        if (representations.length > 0) {
+          const reprType = getRepresentationType(style);
+          const colorTheme = getColorTheme(colorBy);
+
+          try {
+            await plugin.builders.structure.representation.addRepresentation(
+              component.cell,
+              {
+                type: reprType,
+                color: colorTheme,
+              },
+            );
+          } catch {
+            // If direct update fails, the default representation is fine
+          }
+        }
+      }
+    }
+  } catch {
+    // If style application fails entirely, the default look is used
+    console.warn('Could not apply custom style, using default');
+  }
+}
+
+function getRepresentationType(style: string): string {
+  switch (style) {
+    case 'cartoon': return 'cartoon';
+    case 'ball-and-stick': return 'ball-and-stick';
+    case 'surface': return 'gaussian-surface';
+    case 'spacefill': return 'spacefill';
+    default: return 'cartoon';
+  }
+}
+
+function getColorTheme(colorBy: string): string {
+  switch (colorBy) {
+    case 'chain': return 'chain-id';
+    case 'residue': return 'residue-name';
+    case 'element': return 'element-symbol';
+    case 'uniform': return 'uniform';
+    default: return 'chain-id';
+  }
 }

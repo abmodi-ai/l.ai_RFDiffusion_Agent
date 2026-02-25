@@ -4,16 +4,19 @@ import { useChatStore } from '@/store/chatStore';
 import * as api from '@/api/client';
 import type { JobInfo } from '@/types';
 import { JobCard } from '@/components/JobMonitor/JobCard';
+import { SidebarSkeleton, JobCardSkeleton } from '@/components/Layout/Skeleton';
 
 export function Sidebar() {
   const { user } = useAuthStore();
   const { conversations, loadConversations, selectConversation, newConversation } = useChatStore();
   const [jobs, setJobs] = useState<JobInfo[]>([]);
   const [activeTab, setActiveTab] = useState<'chats' | 'jobs'>('chats');
+  const [loadingChats, setLoadingChats] = useState(true);
+  const [loadingJobs, setLoadingJobs] = useState(true);
 
   useEffect(() => {
-    loadConversations();
-    api.listJobs().then(setJobs).catch(() => {});
+    loadConversations().finally(() => setLoadingChats(false));
+    api.listJobs().then(setJobs).catch(() => {}).finally(() => setLoadingJobs(false));
   }, [loadConversations]);
 
   return (
@@ -64,33 +67,50 @@ export function Sidebar() {
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
         {activeTab === 'chats' ? (
-          <div className="p-2 space-y-1">
-            {conversations.length === 0 && (
-              <p className="text-xs text-gray-500 p-3 text-center">
-                No conversations yet
-              </p>
-            )}
-            {conversations.map((conv) => (
-              <button
-                key={conv.conversation_id}
-                onClick={() => selectConversation(conv.conversation_id)}
-                className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-700 text-sm text-gray-300 truncate transition-colors"
-              >
-                {conv.preview || 'Empty conversation'}
-              </button>
-            ))}
-          </div>
+          loadingChats ? (
+            <SidebarSkeleton />
+          ) : (
+            <div className="p-2 space-y-1">
+              {conversations.length === 0 && (
+                <p className="text-xs text-gray-500 p-3 text-center">
+                  No conversations yet
+                </p>
+              )}
+              {conversations.map((conv) => (
+                <button
+                  key={conv.conversation_id}
+                  onClick={() => selectConversation(conv.conversation_id)}
+                  className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-700 text-sm transition-colors"
+                >
+                  <div className="text-gray-200 truncate">
+                    {conv.title || conv.preview || 'Empty conversation'}
+                  </div>
+                  {conv.title && conv.preview && (
+                    <div className="text-xs text-gray-500 truncate mt-0.5">
+                      {conv.preview}
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+          )
         ) : (
-          <div className="p-2 space-y-2">
-            {jobs.length === 0 && (
-              <p className="text-xs text-gray-500 p-3 text-center">
-                No jobs yet
-              </p>
-            )}
-            {jobs.map((job) => (
-              <JobCard key={job.job_id} job={job} />
-            ))}
-          </div>
+          loadingJobs ? (
+            <div className="p-2 space-y-2">
+              {[...Array(3)].map((_, i) => <JobCardSkeleton key={i} />)}
+            </div>
+          ) : (
+            <div className="p-2 space-y-2">
+              {jobs.length === 0 && (
+                <p className="text-xs text-gray-500 p-3 text-center">
+                  No jobs yet
+                </p>
+              )}
+              {jobs.map((job) => (
+                <JobCard key={job.job_id} job={job} />
+              ))}
+            </div>
+          )
         )}
       </div>
     </div>

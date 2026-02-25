@@ -16,6 +16,7 @@ interface ChatState {
   conversations: Conversation[];
   conversationId: string | null;
   isStreaming: boolean;
+  isLoadingHistory: boolean;
   error: string | null;
 
   sendMessage: (text: string) => Promise<void>;
@@ -35,6 +36,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
   conversationId: null,
   isStreaming: false,
+  isLoadingHistory: false,
   error: null,
 
   sendMessage: async (text: string) => {
@@ -125,7 +127,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   selectConversation: async (id: string) => {
-    set({ conversationId: id, messages: [] });
+    set({ conversationId: id, messages: [], isLoadingHistory: true });
     try {
       const history = await api.getConversationHistory(id);
       const messages: ChatMessage[] = (history as Array<{ id: string; role: string; content: string; model_used?: string; created_at: string }>).map((m) => ({
@@ -135,9 +137,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         modelUsed: m.model_used,
         timestamp: m.created_at,
       }));
-      set({ messages });
+      set({ messages, isLoadingHistory: false });
     } catch (err) {
-      set({ error: (err as Error).message });
+      set({ error: (err as Error).message, isLoadingHistory: false });
     }
   },
 
@@ -207,12 +209,28 @@ function _processSSE(
       }));
       break;
     }
+    case 'title': {
+      const d = data as { title: string };
+      const { conversationId } = get();
+      if (conversationId) {
+        set((s) => ({
+          conversations: s.conversations.map((c) =>
+            c.conversation_id === conversationId
+              ? { ...c, title: d.title }
+              : c,
+          ),
+        }));
+      }
+      break;
+    }
     case 'done': {
       const d = data as { model_used: string };
       updateAssistant((m) => ({
         ...m,
         modelUsed: d.model_used,
       }));
+      // Refresh conversations list to pick up new conversation
+      get().loadConversations();
       break;
     }
   }

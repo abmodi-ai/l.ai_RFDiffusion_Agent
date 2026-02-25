@@ -16,9 +16,10 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
 from app.agent.claude_agent import run_agent_streaming
+from app.agent.title_generator import generate_conversation_title
 from app.agent.tool_handlers import ToolContext
 from app.db.connection import get_db_session
-from app.db.models import ChatMessage, User
+from app.db.models import ChatMessage, ConversationMetadata, User
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -66,6 +67,7 @@ async def send_message(
 
     # Load conversation history from DB
     messages = _load_conversation_messages(db, user.id, conversation_id)
+    is_new_conversation = len(messages) == 0
 
     tool_context = ToolContext(
         file_manager=file_manager,
@@ -87,6 +89,15 @@ async def send_message(
             db_session=db,
         ):
             yield _format_sse(event["event"], event["data"])
+
+        # Generate title for new conversations using Haiku
+        if is_new_conversation and settings.ANTHROPIC_API_KEY:
+            title = generate_conversation_title(
+                settings.ANTHROPIC_API_KEY, body.message
+            )
+            if title:
+                _save_conversation_title(db, conversation_id, user.id, title)
+                yield _format_sse("title", {"title": title})
 
     return StreamingResponse(
         event_generator(),
@@ -142,8 +153,19 @@ def list_conversations(
         .all()
     )
 
+    # Bulk-fetch stored titles
+    title_map = {}
+    conv_id_list = [cid for (cid,) in conversation_ids]
+    if conv_id_list:
+        metas = (
+            db.query(ConversationMetadata)
+            .filter(ConversationMetadata.conversation_id.in_(conv_id_list))
+            .all()
+        )
+        title_map = {m.conversation_id: m.title for m in metas}
+
     conversations = []
-    for (conv_id,) in conversation_ids:
+    for conv_id in conv_id_list:
         first_msg = (
             db.query(ChatMessage)
             .filter(
@@ -163,9 +185,11 @@ def list_conversations(
             .order_by(ChatMessage.created_at.desc())
             .first()
         )
+        preview = (first_msg.content[:100] + "...") if first_msg and len(first_msg.content) > 100 else (first_msg.content if first_msg else "")
         conversations.append({
             "conversation_id": str(conv_id),
-            "preview": (first_msg.content[:100] + "...") if first_msg and len(first_msg.content) > 100 else (first_msg.content if first_msg else ""),
+            "title": title_map.get(conv_id),
+            "preview": preview,
             "last_activity": last_msg.created_at.isoformat() if last_msg else None,
         })
 
@@ -202,10 +226,23 @@ def _load_conversation_messages(
     return messages
 
 
+def _save_conversation_title(
+    db: Session,
+    conversation_id: uuid.UUID,
+    user_id: uuid.UUID,
+    title: str,
+) -> None:
+    """Persist a generated conversation title."""
+    meta = ConversationMetadata(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        title=title,
+    )
+    db.merge(meta)
+    db.flush()
+
+
 def _format_sse(event: str, data) -> str:
     """Format a Server-Sent Event."""
-    if isinstance(data, str):
-        json_data = json.dumps(data)
-    else:
-        json_data = json.dumps(data)
+    json_data = json.dumps(data)
     return f"event: {event}\ndata: {json_data}\n\n"

@@ -28,6 +28,24 @@ TOOLS = [
         },
     },
     {
+        "name": "fetch_pdb",
+        "description": (
+            "Fetch a PDB structure from the RCSB Protein Data Bank by its "
+            "4-character PDB ID. Use when the user references a PDB ID "
+            "(e.g., '6AL5', '1BRS') instead of uploading a file."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pdb_id": {
+                    "type": "string",
+                    "description": "4-character RCSB PDB ID (e.g., '6AL5', '1BRS')",
+                }
+            },
+            "required": ["pdb_id"],
+        },
+    },
+    {
         "name": "run_rfdiffusion",
         "description": (
             "Run RFdiffusion to design protein binders. Requires an uploaded "

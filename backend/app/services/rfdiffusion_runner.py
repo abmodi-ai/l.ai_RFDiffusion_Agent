@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -55,9 +56,14 @@ async def run_rfdiffusion(
     # Build the output prefix for this job
     output_prefix = output_dir / "design"
 
+    # Determine checkpoint path — this platform always uses the Complex
+    # checkpoint for binder / PPI design tasks.
+    ckpt_path = model_dir / "Complex_base_ckpt.pt"
+
     # Assemble command arguments (NO shell=True to prevent injection)
+    # Use the same Python interpreter as the running backend (venv-aware).
     cmd = [
-        "python3",
+        sys.executable,
         str(rfdiffusion_dir / "scripts" / "run_inference.py"),
         f"inference.output_prefix={output_prefix}",
         f"inference.input_pdb={input_pdb_path}",
@@ -65,6 +71,7 @@ async def run_rfdiffusion(
         f"inference.num_designs={num_designs}",
         f"diffuser.T={diffuser_T}",
         f"inference.model_directory_path={model_dir}",
+        f"inference.ckpt_override_path={ckpt_path}",
     ]
 
     if hotspot_res:

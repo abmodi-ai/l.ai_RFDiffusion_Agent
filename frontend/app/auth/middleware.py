@@ -14,11 +14,11 @@ from typing import Optional
 import streamlit as st
 from extra_streamlit_components import CookieManager
 
-from ..config import get_settings
-from ..db.audit import log_login, log_logout, log_register
-from ..db.connection import get_db
-from ..db.models import User
-from .utils import (
+from app.config import get_settings
+from app.db.audit import log_login, log_logout, log_register
+from app.db.connection import get_db
+from app.db.models import User
+from app.auth.utils import (
     authenticate_user,
     create_jwt,
     create_session,

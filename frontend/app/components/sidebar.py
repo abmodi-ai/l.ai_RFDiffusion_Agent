@@ -8,8 +8,8 @@ PDB file upload, active jobs list, and settings.
 import streamlit as st
 import requests
 
-from ..config import get_settings
-from ..auth.middleware import logout
+from app.config import get_settings
+from app.auth.middleware import logout
 
 
 def render_sidebar(user):

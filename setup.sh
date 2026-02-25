@@ -42,10 +42,21 @@ if [ ! -d "$SCRIPT_DIR/dgl" ]; then
 fi
 
 cd "$SCRIPT_DIR/dgl"
+
+# CUDA 13.0 dropped support for old architectures (compute_50, _60).
+# The GB10 (Blackwell) is compute_121, but DGL's auto-detection doesn't
+# recognise it and falls back to building ALL known archs (including
+# unsupported ones).  Fix: tell DGL to build for Hopper (compute_90)
+# only — it is forward-compatible with Blackwell via JIT.
+# CUDAARCHS env var is picked up by graphbolt's nested cmake.
+export CUDAARCHS="90"
+
+rm -rf build
 mkdir -p build && cd build
 cmake .. \
     -DUSE_CUDA=ON \
-    -DTORCH_CUDA_ARCH_LIST="12.1" \
+    -DCUDA_ARCH_NAME=Hopper \
+    -DCMAKE_CUDA_ARCHITECTURES=90 \
     -DBUILD_TORCH=ON \
     -DCMAKE_BUILD_TYPE=Release
 make -j"$(nproc)"

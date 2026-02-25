@@ -41,6 +41,7 @@ export interface VisualizationData {
 
 export interface Conversation {
   conversation_id: string;
+  title: string | null;
   preview: string;
   last_activity: string | null;
 }
@@ -53,6 +54,7 @@ export type SSEEventType =
   | 'tool_call'
   | 'tool_result'
   | 'visualization'
+  | 'title'
   | 'done';
 
 export interface SSEEvent {

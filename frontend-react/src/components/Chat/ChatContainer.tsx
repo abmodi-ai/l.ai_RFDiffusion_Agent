@@ -2,9 +2,10 @@ import { useRef, useEffect } from 'react';
 import { useChatStore } from '@/store/chatStore';
 import { ChatMessage } from '@/components/Chat/ChatMessage';
 import { ChatInput } from '@/components/Chat/ChatInput';
+import { ChatSkeleton } from '@/components/Layout/Skeleton';
 
 export function ChatContainer() {
-  const { messages, isStreaming } = useChatStore();
+  const { messages, isStreaming, isLoadingHistory } = useChatStore();
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -15,7 +16,9 @@ export function ChatContainer() {
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto px-4 py-6">
-        {messages.length === 0 && (
+        {isLoadingHistory && <ChatSkeleton />}
+
+        {!isLoadingHistory && messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-gray-400">
             <svg
               className="w-16 h-16 mb-4"

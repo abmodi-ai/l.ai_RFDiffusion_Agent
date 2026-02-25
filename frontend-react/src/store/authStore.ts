@@ -1,5 +1,9 @@
 /**
  * Zustand store for authentication state.
+ *
+ * Listens for `ligant:auth-expired` events dispatched by the API client
+ * when a 401 is received, automatically clearing state so the UI shows
+ * the login form.
  */
 
 import { create } from 'zustand';
@@ -19,79 +23,92 @@ interface AuthState {
   clearError: () => void;
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
-  token: localStorage.getItem('ligant_token'),
-  user: null,
-  isLoading: false,
-  error: null,
-
-  login: async (email, password) => {
-    set({ isLoading: true, error: null });
-    try {
-      const res = await api.login(email, password);
-      localStorage.setItem('ligant_token', res.token);
+export const useAuthStore = create<AuthState>((set) => {
+  // Listen for auth-expired events from the API client
+  if (typeof window !== 'undefined') {
+    window.addEventListener('ligant:auth-expired', () => {
       set({
-        token: res.token,
-        user: {
-          user_id: res.user_id,
-          email: res.email,
-          display_name: res.display_name,
-          is_admin: false,
-          created_at: new Date().toISOString(),
-        },
-        isLoading: false,
+        token: null,
+        user: null,
+        error: 'Session expired — please sign in again.',
       });
-    } catch (err) {
-      set({ error: (err as Error).message, isLoading: false });
-    }
-  },
+    });
+  }
 
-  register: async (email, password, displayName) => {
-    set({ isLoading: true, error: null });
-    try {
-      const res = await api.register(email, password, displayName);
-      localStorage.setItem('ligant_token', res.token);
-      set({
-        token: res.token,
-        user: {
-          user_id: res.user_id,
-          email: res.email,
-          display_name: res.display_name,
-          is_admin: false,
-          created_at: new Date().toISOString(),
-        },
-        isLoading: false,
-      });
-    } catch (err) {
-      set({ error: (err as Error).message, isLoading: false });
-    }
-  },
+  return {
+    token: localStorage.getItem('ligant_token'),
+    user: null,
+    isLoading: false,
+    error: null,
 
-  logout: async () => {
-    try {
-      await api.logout();
-    } catch {
-      // Ignore errors during logout
-    }
-    localStorage.removeItem('ligant_token');
-    set({ token: null, user: null });
-  },
+    login: async (email, password) => {
+      set({ isLoading: true, error: null });
+      try {
+        const res = await api.login(email, password);
+        localStorage.setItem('ligant_token', res.token);
+        set({
+          token: res.token,
+          user: {
+            user_id: res.user_id,
+            email: res.email,
+            display_name: res.display_name,
+            is_admin: false,
+            created_at: new Date().toISOString(),
+          },
+          isLoading: false,
+        });
+      } catch (err) {
+        set({ error: (err as Error).message, isLoading: false });
+      }
+    },
 
-  checkAuth: async () => {
-    const token = localStorage.getItem('ligant_token');
-    if (!token) {
-      set({ token: null, user: null });
-      return;
-    }
-    set({ isLoading: true });
-    try {
-      const user = await api.getMe();
-      set({ token, user, isLoading: false });
-    } catch {
+    register: async (email, password, displayName) => {
+      set({ isLoading: true, error: null });
+      try {
+        const res = await api.register(email, password, displayName);
+        localStorage.setItem('ligant_token', res.token);
+        set({
+          token: res.token,
+          user: {
+            user_id: res.user_id,
+            email: res.email,
+            display_name: res.display_name,
+            is_admin: false,
+            created_at: new Date().toISOString(),
+          },
+          isLoading: false,
+        });
+      } catch (err) {
+        set({ error: (err as Error).message, isLoading: false });
+      }
+    },
+
+    logout: async () => {
+      try {
+        await api.logout();
+      } catch {
+        // Ignore errors during logout
+      }
       localStorage.removeItem('ligant_token');
-      set({ token: null, user: null, isLoading: false });
-    }
-  },
+      set({ token: null, user: null });
+    },
 
-  clearError: () => set({ error: null }),
-}));
+    checkAuth: async () => {
+      const token = localStorage.getItem('ligant_token');
+      if (!token) {
+        set({ token: null, user: null });
+        return;
+      }
+      set({ isLoading: true });
+      try {
+        const user = await api.getMe();
+        set({ token, user, isLoading: false });
+      } catch {
+        localStorage.removeItem('ligant_token');
+        set({ token: null, user: null, isLoading: false });
+      }
+    },
+
+    clearError: () => set({ error: null }),
+  };
+});

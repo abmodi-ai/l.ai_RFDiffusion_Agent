@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
-from frontend.app.db.models import AuditLog
+from app.db.models import AuditLog
 
 
 # ── Core helper ──────────────────────────────────────────────────────────────
@@ -138,6 +138,24 @@ def log_pdb_uploaded(
         user_id=user_id,
         action_type="pdb.uploaded",
         action_details={"filename": filename},
+        resource_type="pdb_file",
+        resource_id=str(file_id),
+    )
+
+
+def log_pdb_fetched(
+    db: Session,
+    user_id: uuid.UUID,
+    file_id: uuid.UUID,
+    pdb_id: str,
+    filename: str,
+) -> AuditLog:
+    """Record that a PDB file was fetched from RCSB by PDB ID."""
+    return log_action(
+        db,
+        user_id=user_id,
+        action_type="pdb.fetched_rcsb",
+        action_details={"pdb_id": pdb_id, "filename": filename},
         resource_type="pdb_file",
         resource_id=str(file_id),
     )

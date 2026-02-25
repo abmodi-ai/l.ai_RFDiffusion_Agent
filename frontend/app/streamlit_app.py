@@ -6,6 +6,16 @@ the chat interface (backed by a Claude AI agent), 3D structure
 visualization, and job history.
 """
 
+import os
+import sys
+
+# Ensure the frontend/ directory is on sys.path so absolute imports like
+# ``from app.auth.middleware import ...`` work when Streamlit runs this file
+# as __main__.
+_frontend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _frontend_dir not in sys.path:
+    sys.path.insert(0, _frontend_dir)
+
 import streamlit as st
 from uuid import uuid4
 
@@ -16,10 +26,10 @@ st.set_page_config(
     layout="wide",
 )
 
-from .auth.middleware import require_auth
-from .components.sidebar import render_sidebar
-from .components.viewer_3d import render_pdb_viewer, render_overlay_comparison
-from .pages.history import render_history_page
+from app.auth.middleware import require_auth
+from app.components.sidebar import render_sidebar
+from app.components.viewer_3d import render_pdb_viewer, render_overlay_comparison
+from app.pages.history import render_history_page
 
 # ── Authentication gate ──────────────────────────────────────────────────────
 user = require_auth()
@@ -53,27 +63,32 @@ tab_chat, tab_history = st.tabs(["Chat", "History"])
 # ── Chat Tab ──────────────────────────────────────────────────────────────────
 with tab_chat:
 
-    # Display chat history
+    # Display chat history (Anthropic message format: content may be str or list)
     for msg in st.session_state["chat_history"]:
         role = msg.get("role", "assistant")
         content = msg.get("content", "")
-        tool_calls = msg.get("tool_calls")
+
+        # Skip tool_result messages (role=user with tool results)
+        if role == "user" and isinstance(content, list) and content and isinstance(content[0], dict) and content[0].get("type") == "tool_result":
+            continue
 
         with st.chat_message(role):
-            st.markdown(content)
-
-            # Show tool call details if present
-            if tool_calls:
-                with st.expander("Tool calls", expanded=False):
-                    for tc in tool_calls:
-                        tool_name = tc.get("name", "unknown")
-                        tool_input = tc.get("input", {})
-                        tool_result = tc.get("result", "")
-                        st.markdown(f"**{tool_name}**")
-                        if tool_input:
-                            st.json(tool_input)
-                        if tool_result:
-                            st.code(str(tool_result)[:500], language=None)
+            if isinstance(content, str):
+                st.markdown(content)
+            elif isinstance(content, list):
+                tool_blocks = []
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "text":
+                            st.markdown(block["text"])
+                        elif block.get("type") == "tool_use":
+                            tool_blocks.append(block)
+                if tool_blocks:
+                    with st.expander("Tool calls", expanded=False):
+                        for tc in tool_blocks:
+                            st.markdown(f"**{tc.get('name', 'unknown')}**")
+                            if tc.get("input"):
+                                st.json(tc["input"])
 
     # Render any pending visualizations
     if st.session_state["pending_visualizations"]:
@@ -123,49 +138,51 @@ with tab_chat:
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
-                    from .agent import run_agent
+                    from app.agent.claude_agent import run_agent
 
+                    from uuid import UUID as _UUID
                     response = run_agent(
-                        message=user_input,
-                        user_id=str(user.id),
-                        conversation_id=st.session_state["conversation_id"],
+                        user_message=user_input,
+                        user_id=user.id if isinstance(user.id, _UUID) else _UUID(str(user.id)),
+                        conversation_id=_UUID(st.session_state["conversation_id"]),
                     )
 
-                    # Extract response content
-                    assistant_content = response.get("content", "")
-                    tool_calls = response.get("tool_calls", [])
+                    # run_agent returns the full messages list and
+                    # updates st.session_state["chat_history"] internally.
+                    # Extract the last assistant text to display now.
+                    messages = response
+                    assistant_text_parts = []
+                    tool_calls_display = []
 
-                    st.markdown(assistant_content)
+                    # Walk backwards to find the last assistant message(s)
+                    for msg in reversed(messages):
+                        if msg.get("role") != "assistant":
+                            continue
+                        content = msg.get("content", "")
+                        if isinstance(content, str):
+                            assistant_text_parts.insert(0, content)
+                        elif isinstance(content, list):
+                            for block in content:
+                                if isinstance(block, dict):
+                                    if block.get("type") == "text":
+                                        assistant_text_parts.insert(0, block["text"])
+                                    elif block.get("type") == "tool_use":
+                                        tool_calls_display.append(block)
+                        break  # only the last assistant message
 
-                    # Show tool calls if any
-                    if tool_calls:
+                    final_text = "\n\n".join(assistant_text_parts)
+                    if final_text:
+                        st.markdown(final_text)
+
+                    if tool_calls_display:
                         with st.expander("Tool calls", expanded=False):
-                            for tc in tool_calls:
-                                tool_name = tc.get("name", "unknown")
-                                tool_input = tc.get("input", {})
-                                tool_result = tc.get("result", "")
-                                st.markdown(f"**{tool_name}**")
-                                if tool_input:
-                                    st.json(tool_input)
-                                if tool_result:
-                                    st.code(str(tool_result)[:500], language=None)
+                            for tc in tool_calls_display:
+                                st.markdown(f"**{tc.get('name', 'unknown')}**")
+                                if tc.get("input"):
+                                    st.json(tc["input"])
 
-                    # Store assistant message in history
-                    st.session_state["chat_history"].append({
-                        "role": "assistant",
-                        "content": assistant_content,
-                        "tool_calls": tool_calls,
-                    })
-
-                    # Update active jobs if the agent submitted any
-                    if response.get("active_jobs"):
-                        st.session_state["active_jobs"] = response["active_jobs"]
-
-                    # Queue any visualizations
-                    if response.get("visualizations"):
-                        st.session_state["pending_visualizations"].extend(
-                            response["visualizations"]
-                        )
+                    # Check for pending visualizations queued by tool handlers
+                    if st.session_state.get("pending_visualizations"):
                         st.rerun()
 
                 except Exception as exc:

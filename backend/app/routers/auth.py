@@ -1,5 +1,7 @@
 """
 Authentication endpoints: register, login, logout, get current user.
+
+Rate-limited: register (5/min per IP), login (10/min per IP).
 """
 
 from __future__ import annotations
@@ -8,7 +10,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
@@ -17,12 +19,12 @@ from app.auth_utils import (
     create_jwt,
     create_session,
     register_user,
-    revoke_session,
 )
 from app.config import get_settings, Settings
 from app.db.audit import log_login, log_logout, log_register
 from app.db.connection import get_db_session
 from app.db.models import User
+from app.rate_limit import get_client_ip, login_limiter, register_limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -66,6 +68,8 @@ def register(
     settings: Settings = Depends(get_settings),
 ) -> AuthResponse:
     """Create a new user account and return a JWT."""
+    register_limiter.check(get_client_ip(request))
+
     try:
         user = register_user(
             db,
@@ -101,6 +105,8 @@ def login(
     settings: Settings = Depends(get_settings),
 ) -> AuthResponse:
     """Authenticate with email/password and return a JWT."""
+    login_limiter.check(get_client_ip(request))
+
     user = authenticate_user(db, body.email, body.password)
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -127,8 +133,6 @@ def logout(
     db: Session = Depends(get_db_session),
 ) -> dict:
     """Revoke the current session."""
-    # The session token is available via the auth dependency chain;
-    # for simplicity, revoke all active sessions for the user.
     from app.db.models import Session as SessionModel
     from datetime import datetime, timezone
 

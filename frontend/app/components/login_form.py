@@ -7,7 +7,7 @@ and the login / register tab forms provided by the auth middleware.
 
 import streamlit as st
 
-from ..auth.middleware import _show_auth_forms
+from app.auth.middleware import _show_auth_forms
 
 
 # ── Custom CSS for the login page ─────────────────────────────────────────────

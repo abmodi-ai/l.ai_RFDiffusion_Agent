@@ -10,8 +10,8 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, desc, and_
 
-from ..db.connection import get_db
-from ..db.models import Job, AuditLog, PDBFile
+from app.db.connection import get_db
+from app.db.models import Job, AuditLog, PDBFile
 
 
 def _status_badge(status: str) -> str:

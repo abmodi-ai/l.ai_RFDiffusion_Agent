@@ -21,7 +21,19 @@ function authHeaders(): Record<string, string> {
   return headers;
 }
 
+/**
+ * Handle API responses.  On 401 (token expired / revoked) automatically
+ * clears the stored token so the auth store picks up the change and
+ * redirects to the login screen.
+ */
 async function handleResponse<T>(res: Response): Promise<T> {
+  if (res.status === 401) {
+    localStorage.removeItem('ligant_token');
+    // Dispatch a storage event so other tabs/the auth store react
+    window.dispatchEvent(new Event('ligant:auth-expired'));
+    const body = await res.json().catch(() => ({ detail: 'Session expired' }));
+    throw new Error(body.detail || 'Session expired — please sign in again.');
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(body.detail || `HTTP ${res.status}`);
@@ -79,7 +91,7 @@ export async function sendChatMessage(
   message: string,
   conversationId?: string,
 ): Promise<Response> {
-  return fetch(`${API_BASE}/chat/message`, {
+  const res = await fetch(`${API_BASE}/chat/message`, {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify({
@@ -87,6 +99,13 @@ export async function sendChatMessage(
       conversation_id: conversationId,
     }),
   });
+  // Check for auth expiry on the SSE endpoint too
+  if (res.status === 401) {
+    localStorage.removeItem('ligant_token');
+    window.dispatchEvent(new Event('ligant:auth-expired'));
+    throw new Error('Session expired — please sign in again.');
+  }
+  return res;
 }
 
 export async function getConversationHistory(
@@ -119,9 +138,7 @@ export async function listJobs(): Promise<JobInfo[]> {
  */
 export function streamJobProgress(jobId: string): EventSource {
   const token = getToken();
-  // EventSource doesn't support custom headers, so use query param workaround
-  // The backend should accept the token via query param for SSE endpoints
-  return new EventSource(`${API_BASE}/job/${jobId}/stream?token=${token}`);
+  return new EventSource(`${API_BASE}/job/${jobId}/stream${token ? `?token=${token}` : ''}`);
 }
 
 // ── File Upload ─────────────────────────────────────────────────────────────

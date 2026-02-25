@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from Bio.PDB import PDBParser
-from Bio.PDB.Polypeptide import three_to_one
+from Bio.Data.IUPACData import protein_letters_3to1
+
+
+def three_to_one(resname: str) -> str:
+    """Convert 3-letter amino acid code to 1-letter (BioPython 1.86+ compat)."""
+    return protein_letters_3to1[resname.lower().capitalize()]
 
 
 def analyze_pdb(filepath: Path) -> Dict[str, Any]:
@@ -60,10 +65,31 @@ def analyze_pdb(filepath: Path) -> Dict[str, Any]:
         if num_residues > 50:
             sequence_preview += "..."
 
+        # Compute residue range and contiguous segments for contig building
+        residue_start = residues[0].get_id()[1] if residues else None
+        residue_end = residues[-1].get_id()[1] if residues else None
+
+        # Detect contiguous segments (for RFdiffusion contig specification)
+        segments: list[str] = []
+        if residues:
+            seg_start = residues[0].get_id()[1]
+            prev = seg_start
+            cid = chain.get_id()
+            for res in residues[1:]:
+                rnum = res.get_id()[1]
+                if rnum - prev > 1:
+                    segments.append(f"{cid}{seg_start}-{prev}")
+                    seg_start = rnum
+                prev = rnum
+            segments.append(f"{cid}{seg_start}-{prev}")
+
         chains_info.append(
             {
                 "chain_id": chain.get_id(),
                 "num_residues": num_residues,
+                "residue_start": residue_start,
+                "residue_end": residue_end,
+                "segments": segments,
                 "sequence_preview": sequence_preview,
             }
         )
