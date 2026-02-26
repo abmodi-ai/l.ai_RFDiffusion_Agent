@@ -118,6 +118,9 @@ async def run_rfdiffusion(
         hotspot_str = ",".join(hotspot_res)
         cmd.append(f"ppi.hotspot_res=[{hotspot_str}]")
 
+    # Scale timeout by number of designs (each design runs sequentially)
+    job_timeout = config.JOB_TIMEOUT_SECS * num_designs
+
     logger.info("Starting RFdiffusion for job %s: %s", job_id, " ".join(cmd))
     job_manager.update_status(job_id, "running", progress=0.0, message="RFdiffusion started")
     await asyncio.to_thread(_update_db_job_status, db_job_id, "running")
@@ -156,10 +159,9 @@ async def run_rfdiffusion(
                         )
             return "\n".join(lines)
 
-        # Apply timeout
         full_output = await asyncio.wait_for(
             _read_output(),
-            timeout=config.JOB_TIMEOUT_SECS,
+            timeout=job_timeout,
         )
 
         # Wait for process to exit
@@ -214,8 +216,8 @@ async def run_rfdiffusion(
         logger.info("Job %s completed with %d designs", job_id, len(output_pdb_ids))
 
     except asyncio.TimeoutError:
-        timeout_msg = f"Timed out after {config.JOB_TIMEOUT_SECS}s"
-        logger.error("Job %s timed out after %ds", job_id, config.JOB_TIMEOUT_SECS)
+        timeout_msg = f"Timed out after {job_timeout}s"
+        logger.error("Job %s timed out after %ds", job_id, job_timeout)
         job_manager.update_status(
             job_id, "failed", progress=None, message=timeout_msg,
         )

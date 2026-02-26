@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import 'molstar/build/viewer/molstar.css';
 
 /**
  * Mol* (Molstar) 3D molecular viewer component.
